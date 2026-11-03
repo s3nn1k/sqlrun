@@ -52,7 +52,7 @@ function M.open()
 end
 
 function M.show_running(service, source)
-	render({
+	return render({
 		"-- service: " .. service .. " | source: " .. source .. " | status: running...",
 		"",
 	})
@@ -60,9 +60,16 @@ end
 
 function M.show(done)
 	local lines = vim.split(done.stdout or "", "\n", { trimempty = true })
-	local failed = done.code ~= 0 or (done.stderr or "") ~= ""
-	if failed then
-		vim.list_extend(lines, vim.split(done.stderr or "", "\n", { trimempty = true }))
+	local failed = done.code ~= 0
+	if (done.stderr or "") ~= "" then
+		local stderr_lines = vim.split(done.stderr, "\n", { trimempty = true })
+		if failed then
+			vim.list_extend(lines, stderr_lines)
+		else
+			for _, stderr_line in ipairs(stderr_lines) do
+				table.insert(lines, "-- " .. stderr_line)
+			end
+		end
 	end
 	local cut = M.truncate_lines(lines, done.max_lines)
 	if cut.truncated then
@@ -77,7 +84,7 @@ function M.show(done)
 		.. string.format("%.3fs", done.elapsed_seconds)
 		.. " | status: "
 		.. status
-	render(vim.list_extend({ header, "" }, cut.lines))
+	return render(vim.list_extend({ header, "" }, cut.lines))
 end
 
 return M

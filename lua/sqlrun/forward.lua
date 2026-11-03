@@ -1,42 +1,73 @@
 local M = {}
 
 local probe_interval_ms = 100
+local registry_path_suffix = "/sqlrun-forward"
+local pending = {}
 local session_forwards = {}
 
 local function notify_error(message)
 	vim.notify("sqlrun: " .. message, vim.log.levels.ERROR)
 end
 
-local function cache_root()
-	return vim.fs.normalize(vim.fn.stdpath("cache")) .. "/sqlrun-forward"
+local function notify_warn(message)
+	vim.notify("sqlrun: " .. message, vim.log.levels.WARN)
 end
 
-local function owner_path(service)
-	return cache_root() .. "/" .. service
+local function cache_root(root)
+	return root or vim.fs.normalize(vim.fn.stdpath("cache")) .. registry_path_suffix
 end
 
-local function process_start(pid)
-	local result = vim.system({ "ps", "-o", "lstart=", "-p", tostring(pid) }, { text = true }):wait()
+local function owner_path(service, root)
+	return cache_root(root) .. "/" .. service
+end
+
+local function process_starttime(pid)
+	local stat = io.open("/proc/" .. tostring(pid) .. "/stat", "r")
+	if not stat then
+		return nil
+	end
+	local content = stat:read("*a")
+	stat:close()
+	local after_comm = content:match("%)%s*(.*)$")
+	if not after_comm then
+		return nil
+	end
+	local fields = {}
+	for field in after_comm:gmatch("%S+") do
+		table.insert(fields, field)
+	end
+	local comm_last_field = 2
+	local starttime_field = 22
+	return fields[starttime_field - comm_last_field]
+end
+
+local function process_identity(pid)
+	local starttime = process_starttime(pid)
+	if starttime then
+		return starttime
+	end
+	local result = vim.system({ "env", "TZ=UTC", "ps", "-o", "lstart=", "-p", tostring(pid) }, { text = true }):wait()
 	if result.code ~= 0 then
 		return nil
 	end
 	return vim.trim(result.stdout or "")
 end
 
-local function read_owner(service)
-	local file = io.open(owner_path(service), "r")
+function M.read_owner(service, root)
+	local file = io.open(owner_path(service, root), "r")
 	if not file then
 		return nil
 	end
 	local owner_pid = tonumber(file:read("*l"))
 	local owner_start = vim.trim(file:read("*l") or "")
 	local forward_pid = tonumber(file:read("*l"))
+	local forward_start = vim.trim(file:read("*l") or "")
 	file:close()
-	return owner_pid, owner_start, forward_pid
+	return owner_pid, owner_start, forward_pid, forward_start
 end
 
-local function owner_alive(service)
-	local owner_pid, owner_start = read_owner(service)
+function M.owner_alive(service, root)
+	local owner_pid, owner_start = M.read_owner(service, root)
 	if not owner_pid then
 		return false
 	end
@@ -44,40 +75,80 @@ local function owner_alive(service)
 	if not signal and not tostring(err):find("EPERM") then
 		return false
 	end
-	if owner_start ~= "" and process_start(owner_pid) ~= owner_start then
+	if owner_start ~= "" and process_identity(owner_pid) ~= owner_start then
 		return false
 	end
 	return true
 end
 
-local function write_owner(service, forward_pid)
-	local root = cache_root()
-	local ok = pcall(vim.fn.mkdir, root, "p")
-	if not ok then
-		return "cannot create " .. root
+local function forward_alive(service, root)
+	local _, _, forward_pid, forward_start = M.read_owner(service, root)
+	if not forward_pid then
+		return false
 	end
-	local file = io.open(owner_path(service), "w")
+	local current_start = process_identity(forward_pid)
+	if not current_start then
+		return false
+	end
+	if forward_start ~= "" and current_start ~= forward_start then
+		return false
+	end
+	return true
+end
+
+function M.write_owner(service, forward_pid, root)
+	local target_root = cache_root(root)
+	if not pcall(vim.fn.mkdir, target_root, "p") then
+		return "cannot create " .. target_root
+	end
+	local path = owner_path(service, root)
+	local tmp_path = path .. ".tmp"
+	local file = io.open(tmp_path, "w")
 	if not file then
-		return "cannot write " .. owner_path(service)
+		return "cannot write " .. tmp_path
 	end
 	local owner_pid = vim.uv.getpid()
-	file:write(tostring(owner_pid) .. "\n" .. (process_start(owner_pid) or "") .. "\n" .. tostring(forward_pid) .. "\n")
-	file:close()
+	local record = table.concat({
+		tostring(owner_pid),
+		process_identity(owner_pid) or "",
+		tostring(forward_pid),
+		process_identity(forward_pid) or "",
+	}, "\n")
+	local write_ok, write_err = pcall(file.write, file, record, "\n")
+	local close_ok, close_err = pcall(file.close, file)
+	if not write_ok or not close_ok then
+		pcall(vim.uv.fs_unlink, tmp_path)
+		return "cannot write " .. tmp_path .. ": " .. tostring(write_err or close_err)
+	end
+	local renamed, rename_err = pcall(vim.uv.fs_rename, tmp_path, path)
+	if not renamed then
+		pcall(vim.uv.fs_unlink, tmp_path)
+		return "cannot move " .. tmp_path .. " to " .. path .. ": " .. tostring(rename_err)
+	end
 	return nil
 end
 
-local function remove_forward(service)
-	local _, _, forward_pid = read_owner(service)
+function M.remove_forward(service, root)
+	local _, _, forward_pid, forward_start = M.read_owner(service, root)
 	if not forward_pid then
-		pcall(vim.uv.fs_unlink, owner_path(service))
-		return nil
+		pcall(vim.uv.fs_unlink, owner_path(service, root))
+		return
+	end
+	local current_start = process_identity(forward_pid)
+	if not current_start then
+		pcall(vim.uv.fs_unlink, owner_path(service, root))
+		return
+	end
+	if forward_start ~= "" and current_start ~= forward_start then
+		pcall(vim.uv.fs_unlink, owner_path(service, root))
+		notify_warn("forward pid " .. forward_pid .. " of " .. service .. " changed identity, not killed")
+		return
 	end
 	local ok, err = pcall(vim.uv.kill, forward_pid)
-	pcall(vim.uv.fs_unlink, owner_path(service))
+	pcall(vim.uv.fs_unlink, owner_path(service, root))
 	if not ok then
-		return "cannot kill forward " .. tostring(forward_pid) .. " of " .. service .. ": " .. tostring(err)
+		notify_error("cannot kill forward " .. tostring(forward_pid) .. " of " .. service .. ": " .. tostring(err))
 	end
-	return nil
 end
 
 local function tcp_probe(port, timeout_ms, on_result)
@@ -103,37 +174,90 @@ local function tcp_probe(port, timeout_ms, on_result)
 	attempt()
 end
 
-function M.ensure_forward(service, opts, on_ready)
+function M.ensure_forward(service, opts, on_ready, on_failed)
 	if not opts.port then
 		notify_error("service " .. service .. ": no valid port in connections.toml")
+		if on_failed then
+			on_failed()
+		end
 		return
 	end
+	if pending[service] then
+		notify_warn("query for " .. service .. " is already being prepared")
+		return
+	end
+	pending[service] = true
+
+	local function release_pending()
+		pending[service] = nil
+	end
+
+	local function ready()
+		release_pending()
+		on_ready()
+	end
+
+	local function fail(message)
+		release_pending()
+		notify_error(message)
+		if on_failed then
+			on_failed()
+		end
+	end
+
 	tcp_probe(opts.port, opts.probe_timeout_ms, function(alive)
 		if alive then
-			on_ready()
+			if not M.owner_alive(service) then
+				notify_warn("port " .. opts.port .. " is up but not owned by sqlrun")
+			end
+			ready()
 			return
 		end
+		if forward_alive(service) then
+			tcp_probe(opts.port, opts.probe_timeout_ms, function(came_up)
+				if came_up then
+					ready()
+					return
+				end
+				fail(
+					"service "
+						.. service
+						.. ": live forward did not bring port "
+						.. opts.port
+						.. " up within "
+						.. opts.probe_timeout_ms
+						.. " ms"
+				)
+			end)
+			return
+		end
+		pcall(vim.uv.fs_unlink, owner_path(service))
 		if not (opts.pre_cmd and opts.pre_cmd ~= "") then
-			notify_error("service " .. service .. ": port " .. opts.port .. " is down and pre_cmd is not set")
+			fail("service " .. service .. ": port " .. opts.port .. " is down and pre_cmd is not set")
 			return
 		end
-		local handle = vim.system({ "sh", "-c", "exec " .. opts.pre_cmd }, { detach = true })
+		local spawned, handle_or_err = pcall(vim.system, { "sh", "-c", "exec " .. opts.pre_cmd }, { detach = true })
+		if not spawned then
+			fail("service " .. service .. ": cannot spawn pre_cmd: " .. tostring(handle_or_err))
+			return
+		end
+		local handle = handle_or_err
 		tcp_probe(opts.port, opts.probe_timeout_ms, function(came_up)
 			if not came_up then
 				pcall(vim.uv.kill, handle.pid)
-				notify_error(
+				fail(
 					"service " .. service .. ": port-forward did not come up within " .. opts.probe_timeout_ms .. " ms"
 				)
 				return
 			end
-			local write_error = write_owner(service, handle.pid)
+			local write_error = M.write_owner(service, handle.pid)
 			if write_error then
 				pcall(vim.uv.kill, handle.pid)
-				notify_error(write_error)
+				fail(write_error)
 				return
 			end
-			session_forwards[service] = handle.pid
-			on_ready()
+			session_forwards[service] = { pid = handle.pid, start = process_identity(handle.pid) }
+			ready()
 		end)
 	end)
 end
@@ -144,18 +268,20 @@ function M.sweep()
 		return
 	end
 	for service in vim.fs.dir(root) do
-		if not owner_alive(service) then
-			local err = remove_forward(service)
-			if err then
-				notify_error(err)
-			end
+		if not M.owner_alive(service) then
+			M.remove_forward(service)
 		end
 	end
 end
 
 function M.shutdown()
-	for service, forward_pid in pairs(session_forwards) do
-		pcall(vim.uv.kill, forward_pid)
+	for service, forward in pairs(session_forwards) do
+		local current_start = process_identity(forward.pid)
+		if current_start ~= nil and (forward.start == nil or current_start == forward.start) then
+			pcall(vim.uv.kill, forward.pid)
+		elseif current_start ~= nil then
+			notify_warn("forward pid " .. forward.pid .. " of " .. service .. " changed identity, not killed")
+		end
 		pcall(vim.uv.fs_unlink, owner_path(service))
 	end
 	session_forwards = {}

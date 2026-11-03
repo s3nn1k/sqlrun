@@ -6,8 +6,9 @@ split.
 - Telescope picker over pg services; the choice is cached per buffer with a global
   fallback.
 - Services from `connections.toml` get a managed port-forward: before each run the plugin
-  probes `127.0.0.1:<port>` and raises the section's `pre_cmd` when the port is down;
-  forwards die with their owner session (VimEnter sweep, VimLeavePre shutdown).
+  probes `127.0.0.1:<port>` (up to `probe_timeout_ms` per pass, a cold start can spend two
+  passes) and raises the section's `pre_cmd` when the port is down; forwards die with
+  their owner session (VimEnter sweep, VimLeavePre shutdown).
 - Result buffer `sqlrun://result` shows service, source, timing, status; stderr and
   non-zero exits render as errors; output is capped by `max_lines`; `q` closes the window
   and the next run reuses it.
@@ -27,10 +28,11 @@ All `setup()` keys are optional:
 - `connections_path` - `"~/credentials/postgres/connections.toml"`
 - `max_lines` - `2000`
 - `probe_timeout_ms` - `15000`
-- `border` - `"single"`
 
-`connections.toml` is flat INI: one `[service]` section per service with `port` and an
-optional quoted `pre_cmd`; its port must match the same service in `pg_service.conf`.
+The connections file uses INI-style sections despite the `.toml` name: one `[service]`
+section per service with `port` and an optional quoted `pre_cmd` - exactly one command
+(run via `sh -c exec`, no `&&` or `;`); its port must match the same service in
+`pg_service.conf`.
 
 ## lazy.nvim spec
 

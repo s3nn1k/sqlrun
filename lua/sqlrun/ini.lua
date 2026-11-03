@@ -1,5 +1,8 @@
 local M = {}
 
+local utf8_bom = "\239\187\191"
+local service_name_pattern = "^[%w_.-]+$"
+
 local function strip_quotes(value)
 	if #value >= 2 and value:sub(1, 1) == '"' and value:sub(-1) == '"' then
 		return value:sub(2, -2)
@@ -8,6 +11,9 @@ local function strip_quotes(value)
 end
 
 function M.parse_ini(text)
+	if text:sub(1, #utf8_bom) == utf8_bom then
+		text = text:sub(#utf8_bom + 1)
+	end
 	local sections = {}
 	local current = nil
 	for line in text:gmatch("[^\r\n]+") do
@@ -43,22 +49,36 @@ local function expand(path)
 	return vim.fs.normalize(vim.fn.expand(path))
 end
 
-local function read_ini(path)
+local function service_name_error(sections, source)
+	for name in pairs(sections) do
+		if name:match(service_name_pattern) == nil then
+			return string.format('invalid service name "%s" in %s', name, source)
+		end
+	end
+	return nil
+end
+
+local function read_sections(path, source)
 	local file = io.open(path, "r")
 	if not file then
-		return nil
+		return nil, nil
 	end
 	local text = file:read("*a")
 	file:close()
-	return M.parse_ini(text)
+	local sections = M.parse_ini(text)
+	local err = service_name_error(sections, source)
+	if err then
+		return nil, err
+	end
+	return sections, nil
 end
 
 function M.read_pg_service(path)
-	return read_ini(expand(path or os.getenv("PGSERVICEFILE") or "~/.pg_service.conf"))
+	return read_sections(expand(path or os.getenv("PGSERVICEFILE") or "~/.pg_service.conf"), "pg_service")
 end
 
 function M.read_connections(path)
-	return read_ini(expand(path or "~/credentials/postgres/connections.toml"))
+	return read_sections(expand(path or "~/credentials/postgres/connections.toml"), "connections.toml")
 end
 
 function M.validate_consistency(connections, pg_service)

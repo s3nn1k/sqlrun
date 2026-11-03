@@ -9,7 +9,6 @@ local defaults = {
 	connections_path = "~/credentials/postgres/connections.toml",
 	max_lines = 2000,
 	probe_timeout_ms = 15000,
-	border = "single",
 }
 
 local config = vim.deepcopy(defaults)
@@ -49,10 +48,11 @@ local function service_names(connections, pg_service)
 	return names
 end
 
-local function open_picker(names, on_selected)
+local function open_picker(names, handler)
 	local ok, pickers = pcall(require, "telescope.pickers")
 	if not ok then
 		notify_error("service picker needs telescope.nvim: " .. tostring(pickers))
+		handler(nil)
 		return
 	end
 	local actions = require("telescope.actions")
@@ -64,13 +64,19 @@ local function open_picker(names, on_selected)
 			prompt_title = "SQL service",
 			finder = finders.new_table({ results = names }),
 			sorter = conf.generic_sorter({}),
-			attach_mappings = function(prompt_bufnr)
+			attach_mappings = function(prompt_bufnr, map)
+				map("i", "<esc>", function()
+					actions.close(prompt_bufnr)
+					handler(nil)
+					return true
+				end)
 				actions.select_default:replace(function()
 					local entry = action_state.get_selected_entry()
 					actions.close(prompt_bufnr)
 					if entry then
-						store_service(entry.value)
-						on_selected(entry.value)
+						handler(entry.value)
+					else
+						handler(nil)
 					end
 				end)
 				return true
@@ -80,28 +86,41 @@ local function open_picker(names, on_selected)
 end
 
 function M.pick_service(on_selected)
-	local connections = ini.read_connections(config.connections_path)
-	local pg_service = ini.read_pg_service(config.pg_service_path)
+	local handler = on_selected
+	if not handler then
+		handler = function(service)
+			if service then
+				store_service(service)
+			end
+		end
+	end
+	local connections, connections_error = ini.read_connections(config.connections_path)
+	local pg_service, pg_error = ini.read_pg_service(config.pg_service_path)
+	if connections_error or pg_error then
+		notify_error(connections_error or pg_error)
+		handler(nil)
+		return
+	end
 	if connections and next(connections) then
 		local consistency_error = ini.validate_consistency(connections, pg_service)
 		if consistency_error then
 			notify_error(consistency_error)
+			handler(nil)
 			return
 		end
 	end
 	local names = service_names(connections, pg_service)
 	if #names == 0 then
 		vim.notify("sqlrun: no pg services found", vim.log.levels.WARN)
+		handler(nil)
 		return
 	end
-	open_picker(names, on_selected or store_service)
+	open_picker(names, handler)
 end
 
 local function visual_selection()
-	local start = vim.fn.getpos("'<")
-	local finish = vim.fn.getpos("'>")
-	local lines = vim.api.nvim_buf_get_lines(0, start[2] - 1, finish[2], false)
-	if #lines == 0 then
+	local lines = vim.fn.getregion(vim.fn.getpos("v"), vim.fn.getpos("."), vim.fn.mode())
+	if not lines or #lines == 0 then
 		return nil
 	end
 	return vim.trim(table.concat(lines, "\n"))
@@ -121,6 +140,13 @@ local function current_target()
 	if path == "" or vim.fn.filereadable(path) ~= 1 then
 		vim.notify("sqlrun: current buffer is not a file, select a query in visual mode", vim.log.levels.WARN)
 		return nil
+	end
+	if vim.bo.modified then
+		local saved, save_err = pcall(vim.cmd.update)
+		if not saved then
+			notify_error("cannot save buffer: " .. tostring(save_err))
+			return nil
+		end
 	end
 	return { path = path, source = path }
 end
@@ -148,14 +174,10 @@ end
 
 local function execute(service, target)
 	local win = result.open()
-	if not win then
-		return
-	end
 	local columns = vim.api.nvim_win_get_width(win)
 	result.show_running(service, target.source)
-	running = true
 	local started_at = vim.uv.hrtime()
-	vim.system(psql_args(service, target, columns), { text = true }, function(done)
+	local ok, spawn_or_err = pcall(vim.system, psql_args(service, target, columns), { text = true }, function(done)
 		running = false
 		vim.schedule(function()
 			result.show({
@@ -169,13 +191,29 @@ local function execute(service, target)
 			})
 		end)
 	end)
+	if not ok then
+		running = false
+		notify_error("cannot run psql: " .. tostring(spawn_or_err))
+	end
 end
 
 local function start_query(service, target)
-	local connections = ini.read_connections(config.connections_path)
+	local connections, connections_error = ini.read_connections(config.connections_path)
+	if connections_error then
+		running = false
+		notify_error(connections_error)
+		return
+	end
 	if connections and connections[service] then
-		local consistency_error = ini.validate_consistency(connections, ini.read_pg_service(config.pg_service_path))
+		local pg_service, pg_error = ini.read_pg_service(config.pg_service_path)
+		if pg_error then
+			running = false
+			notify_error(pg_error)
+			return
+		end
+		local consistency_error = ini.validate_consistency(connections, pg_service)
 		if consistency_error then
+			running = false
 			notify_error(consistency_error)
 			return
 		end
@@ -185,12 +223,21 @@ local function start_query(service, target)
 			{ port = ini.parse_port(section), pre_cmd = section.pre_cmd, probe_timeout_ms = config.probe_timeout_ms },
 			function()
 				execute(service, target)
+			end,
+			function()
+				running = false
 			end
 		)
 		return
 	end
-	local pg_service = ini.read_pg_service(config.pg_service_path)
+	local pg_service, pg_error = ini.read_pg_service(config.pg_service_path)
+	if pg_error then
+		running = false
+		notify_error(pg_error)
+		return
+	end
 	if not pg_service or not pg_service[service] then
+		running = false
 		notify_error("service " .. service .. " not found in pg_service or connections")
 		return
 	end
@@ -202,8 +249,10 @@ function M.run()
 		vim.notify("sqlrun: query already running", vim.log.levels.WARN)
 		return
 	end
+	running = true
 	local target = current_target()
 	if not target then
+		running = false
 		return
 	end
 	local service = M.cached_service()
@@ -211,6 +260,10 @@ function M.run()
 		start_query(service, target)
 	else
 		M.pick_service(function(chosen)
+			if not chosen then
+				running = false
+				return
+			end
 			start_query(chosen, target)
 		end)
 	end
