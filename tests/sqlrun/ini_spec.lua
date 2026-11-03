@@ -80,6 +80,24 @@ describe("config readers", function()
 	it("returns nothing for a missing file", function()
 		assert.is_nil(ini.read_connections(vim.fs.normalize(vim.fn.tempname()) .. "/absent.toml"))
 	end)
+
+	it("warns once per file path per session", function()
+		local path = vim.fs.normalize(vim.fn.tempname())
+		vim.fn.writefile({ "[../evil]", "port=1" }, path)
+		local warns = {}
+		local original_notify = vim.notify
+		vim.notify = function(message, level)
+			if level == vim.log.levels.WARN then
+				table.insert(warns, message)
+			end
+		end
+		ini.read_connections(path)
+		ini.read_connections(path)
+		ini.read_connections(path)
+		vim.notify = original_notify
+		assert.same(1, #warns)
+		vim.fn.delete(path)
+	end)
 end)
 
 describe("validate_consistency", function()

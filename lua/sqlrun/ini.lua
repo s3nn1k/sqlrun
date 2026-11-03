@@ -53,7 +53,9 @@ local function expand(path)
 	return vim.fs.normalize(vim.fn.expand(path))
 end
 
-local function sanitize_sections(sections, source)
+local warned_sources = {}
+
+local function sanitize_sections(sections, path, source)
 	local valid = {}
 	local unsafe = {}
 	for name, section in pairs(sections) do
@@ -63,7 +65,8 @@ local function sanitize_sections(sections, source)
 			table.insert(unsafe, name)
 		end
 	end
-	if #unsafe > 0 then
+	if #unsafe > 0 and not warned_sources[path] then
+		warned_sources[path] = true
 		table.sort(unsafe)
 		local listed = {}
 		for _, name in ipairs(unsafe) do
@@ -84,7 +87,7 @@ local function read_sections(path, source)
 	end
 	local text = file:read("*a")
 	file:close()
-	return sanitize_sections(M.parse_ini(text), source)
+	return sanitize_sections(M.parse_ini(text), path, source)
 end
 
 function M.read_pg_service(path)

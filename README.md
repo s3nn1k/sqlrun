@@ -6,9 +6,10 @@ split.
 - Telescope picker over pg services; the choice is cached per buffer with a global
   fallback.
 - Services from `connections.toml` get a managed port-forward: before each run the plugin
-  probes `127.0.0.1:<port>` (up to `probe_timeout_ms` per pass, a cold start can spend two
-  passes) and raises the section's `pre_cmd` when the port is down; forwards die with
-  their owner session (VimEnter sweep, VimLeavePre shutdown).
+  probes `127.0.0.1:<port>` (up to `probe_timeout_ms` per pass; a cold start can spend two
+  passes, a stale forward with a dead owner costs a third recovery pass) and raises the
+  section's `pre_cmd` when the port is down; forwards die with their owner session
+  (VimEnter sweep, VimLeavePre shutdown).
 - Result buffer `sqlrun://result` shows service, source, timing, status; stderr and
   non-zero exits render as errors; output is capped by `max_lines`; `q` closes the window
   and the next run reuses it.

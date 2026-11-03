@@ -312,8 +312,9 @@ function M.sweep()
 	end
 end
 
-function M.shutdown()
-	for service, forward in pairs(session_forwards) do
+function M.shutdown(session)
+	local forwards = session or session_forwards
+	for service, forward in pairs(forwards) do
 		local current_start = process_identity(forward.pid)
 		if current_start ~= nil and forward.start ~= nil and forward.start ~= "" and current_start == forward.start then
 			pcall(vim.uv.kill, forward.pid)
