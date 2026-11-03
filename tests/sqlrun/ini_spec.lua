@@ -58,19 +58,27 @@ describe("parse_port", function()
 end)
 
 describe("config readers", function()
-	it("rejects invalid section names with the section in the error", function()
+	it("skips unsafe section names with one warning and keeps valid ones", function()
 		local path = vim.fs.normalize(vim.fn.tempname())
 		vim.fn.writefile({ "[ok-one]", "port=1", "[../evil]", "port=2" }, path)
-		local sections, err = ini.read_connections(path)
-		assert.is_nil(sections)
-		assert.truthy(err:find("../evil", 1, true))
+		local warns = {}
+		local original_notify = vim.notify
+		vim.notify = function(message, level)
+			if level == vim.log.levels.WARN then
+				table.insert(warns, message)
+			end
+		end
+		local sections = ini.read_connections(path)
+		vim.notify = original_notify
+		assert.same({ port = "1" }, sections["ok-one"])
+		assert.is_nil(sections["../evil"])
+		assert.same(1, #warns)
+		assert.truthy(warns[1]:find("../evil", 1, true))
 		vim.fn.delete(path)
 	end)
 
-	it("returns nothing for a missing file without an error", function()
-		local sections, err = ini.read_connections(vim.fs.normalize(vim.fn.tempname()) .. "/absent.toml")
-		assert.is_nil(sections)
-		assert.is_nil(err)
+	it("returns nothing for a missing file", function()
+		assert.is_nil(ini.read_connections(vim.fs.normalize(vim.fn.tempname()) .. "/absent.toml"))
 	end)
 end)
 

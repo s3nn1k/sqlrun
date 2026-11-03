@@ -59,26 +59,46 @@ local function open_picker(names, handler)
 	local action_state = require("telescope.actions.state")
 	local finders = require("telescope.finders")
 	local conf = require("telescope.config").values
+
+	local finished = false
+	local function finish(service)
+		if finished then
+			return
+		end
+		finished = true
+		handler(service)
+	end
+
 	pickers
 		.new({}, {
 			prompt_title = "SQL service",
 			finder = finders.new_table({ results = names }),
 			sorter = conf.generic_sorter({}),
 			attach_mappings = function(prompt_bufnr, map)
-				map("i", "<esc>", function()
-					actions.close(prompt_bufnr)
-					handler(nil)
-					return true
-				end)
+				for _, mode in ipairs({ "i", "n" }) do
+					for _, key in ipairs({ "<C-c>", "<esc>", "q" }) do
+						map(mode, key, function()
+							actions.close(prompt_bufnr)
+							finish(nil)
+							return true
+						end)
+					end
+				end
 				actions.select_default:replace(function()
 					local entry = action_state.get_selected_entry()
 					actions.close(prompt_bufnr)
 					if entry then
-						handler(entry.value)
+						finish(entry.value)
 					else
-						handler(nil)
+						finish(nil)
 					end
 				end)
+				vim.api.nvim_create_autocmd("BufWipeout", {
+					buffer = prompt_bufnr,
+					callback = function()
+						finish(nil)
+					end,
+				})
 				return true
 			end,
 		})
@@ -94,13 +114,8 @@ function M.pick_service(on_selected)
 			end
 		end
 	end
-	local connections, connections_error = ini.read_connections(config.connections_path)
-	local pg_service, pg_error = ini.read_pg_service(config.pg_service_path)
-	if connections_error or pg_error then
-		notify_error(connections_error or pg_error)
-		handler(nil)
-		return
-	end
+	local connections = ini.read_connections(config.connections_path)
+	local pg_service = ini.read_pg_service(config.pg_service_path)
 	if connections and next(connections) then
 		local consistency_error = ini.validate_consistency(connections, pg_service)
 		if consistency_error then
@@ -118,8 +133,19 @@ function M.pick_service(on_selected)
 	open_picker(names, handler)
 end
 
+local function visual_type()
+	local mode = vim.fn.mode()
+	if mode:find("^V") then
+		return "V"
+	end
+	if mode:find("^\22") then
+		return "\22"
+	end
+	return "v"
+end
+
 local function visual_selection()
-	local lines = vim.fn.getregion(vim.fn.getpos("v"), vim.fn.getpos("."), vim.fn.mode())
+	local lines = vim.fn.getregion(vim.fn.getpos("v"), vim.fn.getpos("."), { type = visual_type() })
 	if not lines or #lines == 0 then
 		return nil
 	end
@@ -198,19 +224,9 @@ local function execute(service, target)
 end
 
 local function start_query(service, target)
-	local connections, connections_error = ini.read_connections(config.connections_path)
-	if connections_error then
-		running = false
-		notify_error(connections_error)
-		return
-	end
+	local connections = ini.read_connections(config.connections_path)
 	if connections and connections[service] then
-		local pg_service, pg_error = ini.read_pg_service(config.pg_service_path)
-		if pg_error then
-			running = false
-			notify_error(pg_error)
-			return
-		end
+		local pg_service = ini.read_pg_service(config.pg_service_path)
 		local consistency_error = ini.validate_consistency(connections, pg_service)
 		if consistency_error then
 			running = false
@@ -218,24 +234,22 @@ local function start_query(service, target)
 			return
 		end
 		local section = connections[service]
-		forward.ensure_forward(
-			service,
-			{ port = ini.parse_port(section), pre_cmd = section.pre_cmd, probe_timeout_ms = config.probe_timeout_ms },
-			function()
-				execute(service, target)
-			end,
-			function()
-				running = false
-			end
-		)
+		local ensured, ensure_err = pcall(forward.ensure_forward, service, {
+			port = ini.parse_port(section),
+			pre_cmd = section.pre_cmd,
+			probe_timeout_ms = config.probe_timeout_ms,
+		}, function()
+			execute(service, target)
+		end, function()
+			running = false
+		end)
+		if not ensured then
+			running = false
+			notify_error("forward check failed: " .. tostring(ensure_err))
+		end
 		return
 	end
-	local pg_service, pg_error = ini.read_pg_service(config.pg_service_path)
-	if pg_error then
-		running = false
-		notify_error(pg_error)
-		return
-	end
+	local pg_service = ini.read_pg_service(config.pg_service_path)
 	if not pg_service or not pg_service[service] then
 		running = false
 		notify_error("service " .. service .. " not found in pg_service or connections")
@@ -250,21 +264,26 @@ function M.run()
 		return
 	end
 	running = true
-	local target = current_target()
-	if not target then
+	local ok, target_or_err = pcall(current_target)
+	if not ok then
+		running = false
+		notify_error("cannot capture the query: " .. tostring(target_or_err))
+		return
+	end
+	if not target_or_err then
 		running = false
 		return
 	end
 	local service = M.cached_service()
 	if service then
-		start_query(service, target)
+		start_query(service, target_or_err)
 	else
 		M.pick_service(function(chosen)
 			if not chosen then
 				running = false
 				return
 			end
-			start_query(chosen, target)
+			start_query(chosen, target_or_err)
 		end)
 	end
 end

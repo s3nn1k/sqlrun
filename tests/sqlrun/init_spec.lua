@@ -116,4 +116,31 @@ describe("run", function()
 		end, notify_calls)
 		assert.same({}, warnings)
 	end)
+
+	it("resets running when the picker cannot open", function()
+		local telescope_path = vim.fs.normalize(vim.fn.stdpath("data") .. "/lazy/telescope.nvim")
+		local had_telescope = vim.list_contains(vim.opt.runtimepath:get(), telescope_path)
+		if had_telescope then
+			vim.opt.runtimepath:remove(telescope_path)
+		end
+		stub_system()
+		vim.g.sqlrun_service = nil
+		local file = write_file("q3.sql", { "select 1" })
+		vim.cmd("edit " .. vim.fn.fnameescape(file))
+
+		sqlrun.run()
+		sqlrun.run()
+
+		if had_telescope then
+			vim.opt.runtimepath:append(telescope_path)
+		end
+		local busy = vim.tbl_filter(function(call)
+			return call.level == vim.log.levels.WARN and call.message:find("already running", 1, true) ~= nil
+		end, notify_calls)
+		assert.same({}, busy)
+		local errors = vim.tbl_filter(function(call)
+			return call.level == vim.log.levels.ERROR and call.message:find("telescope", 1, true) ~= nil
+		end, notify_calls)
+		assert.same(2, #errors)
+	end)
 end)

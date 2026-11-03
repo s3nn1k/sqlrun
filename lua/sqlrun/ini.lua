@@ -45,32 +45,46 @@ function M.parse_port(section)
 	return port
 end
 
+function M.valid_service_name(name)
+	return type(name) == "string" and name:match(service_name_pattern) ~= nil
+end
+
 local function expand(path)
 	return vim.fs.normalize(vim.fn.expand(path))
 end
 
-local function service_name_error(sections, source)
-	for name in pairs(sections) do
-		if name:match(service_name_pattern) == nil then
-			return string.format('invalid service name "%s" in %s', name, source)
+local function sanitize_sections(sections, source)
+	local valid = {}
+	local unsafe = {}
+	for name, section in pairs(sections) do
+		if M.valid_service_name(name) then
+			valid[name] = section
+		else
+			table.insert(unsafe, name)
 		end
 	end
-	return nil
+	if #unsafe > 0 then
+		table.sort(unsafe)
+		local listed = {}
+		for _, name in ipairs(unsafe) do
+			table.insert(listed, '"' .. name .. '"')
+		end
+		vim.notify(
+			"sqlrun: skipping services with unsafe names in " .. source .. ": " .. table.concat(listed, ", "),
+			vim.log.levels.WARN
+		)
+	end
+	return valid
 end
 
 local function read_sections(path, source)
 	local file = io.open(path, "r")
 	if not file then
-		return nil, nil
+		return nil
 	end
 	local text = file:read("*a")
 	file:close()
-	local sections = M.parse_ini(text)
-	local err = service_name_error(sections, source)
-	if err then
-		return nil, err
-	end
-	return sections, nil
+	return sanitize_sections(M.parse_ini(text), source)
 end
 
 function M.read_pg_service(path)

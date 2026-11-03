@@ -1,3 +1,5 @@
+local ini = require("sqlrun.ini")
+
 local M = {}
 
 local probe_interval_ms = 100
@@ -28,7 +30,7 @@ local function process_starttime(pid)
 	end
 	local content = stat:read("*a")
 	stat:close()
-	local after_comm = content:match("%)%s*(.*)$")
+	local after_comm = content:match(".*%)%s*(.*)$")
 	if not after_comm then
 		return nil
 	end
@@ -102,7 +104,7 @@ function M.write_owner(service, forward_pid, root)
 		return "cannot create " .. target_root
 	end
 	local path = owner_path(service, root)
-	local tmp_path = path .. ".tmp"
+	local tmp_path = path .. "." .. vim.uv.getpid() .. ".tmp"
 	local file = io.open(tmp_path, "w")
 	if not file then
 		return "cannot write " .. tmp_path
@@ -139,7 +141,12 @@ function M.remove_forward(service, root)
 		pcall(vim.uv.fs_unlink, owner_path(service, root))
 		return
 	end
-	if forward_start ~= "" and current_start ~= forward_start then
+	if forward_start == nil or forward_start == "" then
+		pcall(vim.uv.fs_unlink, owner_path(service, root))
+		notify_warn("forward pid " .. forward_pid .. " of " .. service .. " identity unknown, not killed")
+		return
+	end
+	if current_start ~= forward_start then
 		pcall(vim.uv.fs_unlink, owner_path(service, root))
 		notify_warn("forward pid " .. forward_pid .. " of " .. service .. " changed identity, not killed")
 		return
@@ -155,6 +162,12 @@ local function tcp_probe(port, timeout_ms, on_result)
 	local deadline = vim.uv.now() + timeout_ms
 	local function attempt()
 		local handle = vim.uv.new_tcp()
+		if not handle then
+			vim.schedule(function()
+				on_result(false)
+			end)
+			return
+		end
 		handle:connect("127.0.0.1", port, function(err)
 			handle:close()
 			if not err or vim.uv.now() >= deadline then
@@ -175,6 +188,13 @@ local function tcp_probe(port, timeout_ms, on_result)
 end
 
 function M.ensure_forward(service, opts, on_ready, on_failed)
+	if not ini.valid_service_name(service) then
+		notify_error("unsafe service name: " .. service)
+		if on_failed then
+			on_failed()
+		end
+		return
+	end
 	if not opts.port then
 		notify_error("service " .. service .. ": no valid port in connections.toml")
 		if on_failed then
@@ -205,32 +225,7 @@ function M.ensure_forward(service, opts, on_ready, on_failed)
 		end
 	end
 
-	tcp_probe(opts.port, opts.probe_timeout_ms, function(alive)
-		if alive then
-			if not M.owner_alive(service) then
-				notify_warn("port " .. opts.port .. " is up but not owned by sqlrun")
-			end
-			ready()
-			return
-		end
-		if forward_alive(service) then
-			tcp_probe(opts.port, opts.probe_timeout_ms, function(came_up)
-				if came_up then
-					ready()
-					return
-				end
-				fail(
-					"service "
-						.. service
-						.. ": live forward did not bring port "
-						.. opts.port
-						.. " up within "
-						.. opts.probe_timeout_ms
-						.. " ms"
-				)
-			end)
-			return
-		end
+	local function spawn_forward()
 		pcall(vim.uv.fs_unlink, owner_path(service))
 		if not (opts.pre_cmd and opts.pre_cmd ~= "") then
 			fail("service " .. service .. ": port " .. opts.port .. " is down and pre_cmd is not set")
@@ -259,7 +254,50 @@ function M.ensure_forward(service, opts, on_ready, on_failed)
 			session_forwards[service] = { pid = handle.pid, start = process_identity(handle.pid) }
 			ready()
 		end)
+	end
+
+	local ok, setup_err = pcall(function()
+		tcp_probe(opts.port, opts.probe_timeout_ms, function(alive)
+			if alive then
+				if not M.owner_alive(service) then
+					notify_warn("port " .. opts.port .. " is up but not owned by sqlrun")
+				end
+				ready()
+				return
+			end
+			if forward_alive(service) then
+				tcp_probe(opts.port, opts.probe_timeout_ms, function(came_up)
+					if came_up then
+						ready()
+						return
+					end
+					if M.owner_alive(service) then
+						fail(
+							"service "
+								.. service
+								.. ": live forward did not bring port "
+								.. opts.port
+								.. " up within "
+								.. opts.probe_timeout_ms
+								.. " ms"
+						)
+						return
+					end
+					M.remove_forward(service)
+					spawn_forward()
+				end)
+				return
+			end
+			spawn_forward()
+		end)
 	end)
+	if not ok then
+		release_pending()
+		notify_error("forward check failed: " .. tostring(setup_err))
+		if on_failed then
+			on_failed()
+		end
+	end
 end
 
 function M.sweep()
@@ -277,10 +315,12 @@ end
 function M.shutdown()
 	for service, forward in pairs(session_forwards) do
 		local current_start = process_identity(forward.pid)
-		if current_start ~= nil and (forward.start == nil or current_start == forward.start) then
+		if current_start ~= nil and forward.start ~= nil and forward.start ~= "" and current_start == forward.start then
 			pcall(vim.uv.kill, forward.pid)
 		elseif current_start ~= nil then
-			notify_warn("forward pid " .. forward.pid .. " of " .. service .. " changed identity, not killed")
+			notify_warn(
+				"forward pid " .. forward.pid .. " of " .. service .. " identity unknown or changed, not killed"
+			)
 		end
 		pcall(vim.uv.fs_unlink, owner_path(service))
 	end
