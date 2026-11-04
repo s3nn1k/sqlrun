@@ -68,6 +68,22 @@ describe("show", function()
 		assert.truthy(text:find("%-%- NOTICE: ddl committed"))
 	end)
 
+	it("clears the modified flag after rendering", function()
+		result.show({
+			service = "svc",
+			source = "q.sql",
+			elapsed_seconds = 0.1,
+			code = 0,
+			stdout = "ok",
+			stderr = "",
+			max_lines = 100,
+		})
+		local buf = vim.fn.bufnr("sqlrun://result")
+		assert.is_true(buf > 0)
+		assert.is_false(vim.bo[buf].modified)
+		vim.cmd("bd " .. buf)
+	end)
+
 	it("flips status to error on non-zero exit", function()
 		result.show({
 			service = "svc",

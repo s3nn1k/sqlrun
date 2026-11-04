@@ -35,6 +35,7 @@ end
 local function render(lines)
 	local buf = ensure_buffer()
 	vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+	vim.bo[buf].modified = false
 	local win = open_window(buf)
 	pcall(vim.api.nvim_win_set_cursor, win, { 1, 0 })
 	return win
