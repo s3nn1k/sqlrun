@@ -26,15 +26,6 @@ function M.setup(opts)
 	config = vim.tbl_deep_extend("force", defaults, opts or {})
 end
 
-function M.cached_service()
-	return vim.b.sqlrun_service or vim.g.sqlrun_service
-end
-
-local function store_service(service)
-	vim.b.sqlrun_service = service
-	vim.g.sqlrun_service = service
-end
-
 local function service_names(connections, pg_service)
 	local seen = {}
 	for name in pairs(connections or {}) do
@@ -75,15 +66,16 @@ local function open_picker(names, handler)
 			finder = finders.new_table({ results = names }),
 			sorter = conf.generic_sorter({}),
 			attach_mappings = function(prompt_bufnr, map)
-				for _, mode in ipairs({ "i", "n" }) do
-					for _, key in ipairs({ "<C-c>", "<esc>", "q" }) do
-						map(mode, key, function()
-							actions.close(prompt_bufnr)
-							finish(nil)
-							return true
-						end)
-					end
+				local function cancel()
+					actions.close(prompt_bufnr)
+					finish(nil)
+					return true
 				end
+				for _, key in ipairs({ "<C-c>", "<esc>" }) do
+					map("i", key, cancel)
+					map("n", key, cancel)
+				end
+				map("n", "q", cancel)
 				actions.select_default:replace(function()
 					local entry = action_state.get_selected_entry()
 					actions.close(prompt_bufnr)
@@ -106,14 +98,7 @@ local function open_picker(names, handler)
 end
 
 function M.pick_service(on_selected)
-	local handler = on_selected
-	if not handler then
-		handler = function(service)
-			if service then
-				store_service(service)
-			end
-		end
-	end
+	local handler = on_selected or function() end
 	local connections = ini.read_connections(config.connections_path)
 	local pg_service = ini.read_pg_service(config.pg_service_path)
 	if connections and next(connections) then
@@ -203,20 +188,25 @@ local function execute(service, target)
 	local columns = vim.api.nvim_win_get_width(win)
 	result.show_running(service, target.source)
 	local started_at = vim.uv.hrtime()
-	local ok, spawn_or_err = pcall(vim.system, psql_args(service, target, columns), { text = true }, function(done)
-		running = false
-		vim.schedule(function()
-			result.show({
-				service = service,
-				source = target.source,
-				elapsed_seconds = (vim.uv.hrtime() - started_at) / 1e9,
-				code = done.code,
-				stdout = done.stdout,
-				stderr = done.stderr,
-				max_lines = config.max_lines,
-			})
-		end)
-	end)
+	local ok, spawn_or_err = pcall(
+		vim.system,
+		psql_args(service, target, columns),
+		{ text = true, env = { PGSERVICEFILE = expand_path(config.pg_service_path) } },
+		function(done)
+			running = false
+			vim.schedule(function()
+				result.show({
+					service = service,
+					source = target.source,
+					elapsed_seconds = (vim.uv.hrtime() - started_at) / 1e9,
+					code = done.code,
+					stdout = done.stdout,
+					stderr = done.stderr,
+					max_lines = config.max_lines,
+				})
+			end)
+		end
+	)
 	if not ok then
 		running = false
 		notify_error("cannot run psql: " .. tostring(spawn_or_err))
@@ -274,18 +264,13 @@ function M.run()
 		running = false
 		return
 	end
-	local service = M.cached_service()
-	if service then
-		start_query(service, target_or_err)
-	else
-		M.pick_service(function(chosen)
-			if not chosen then
-				running = false
-				return
-			end
-			start_query(chosen, target_or_err)
-		end)
-	end
+	M.pick_service(function(chosen)
+		if not chosen then
+			running = false
+			return
+		end
+		start_query(chosen, target_or_err)
+	end)
 end
 
 function M.sweep()

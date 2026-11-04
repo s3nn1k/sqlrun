@@ -3,8 +3,11 @@
 Neovim plugin: run SQL files or visual selections through `psql` into a reusable bottom
 split.
 
-- Telescope picker over pg services; the choice is cached per buffer with a global
-  fallback.
+- Telescope picker over pg services on every run: capture the query first, pick the
+  connection, run psql; the choice is not cached.
+- psql reads the picked service through `PGSERVICEFILE` set to the expanded
+  `pg_service_path`; the rest of the environment is inherited and `pgpass` is left to
+  libpq.
 - Services from `connections.toml` get a managed port-forward: before each run the plugin
   probes `127.0.0.1:<port>` (up to `probe_timeout_ms` per pass; a cold start can spend two
   passes, a stale forward with a dead owner costs a third recovery pass) and raises the
@@ -44,7 +47,6 @@ section per service with `port` and an optional quoted `pre_cmd` - exactly one c
 	dependencies = { "nvim-telescope/telescope.nvim" },
 	keys = {
 		{ "<leader>X", function() require("sqlrun").run() end, mode = { "n", "v" }, desc = "sqlrun: run query" },
-		{ "<leader>Xs", function() require("sqlrun").pick_service() end, desc = "sqlrun: pick service" },
 	},
 	init = function()
 		local group = vim.api.nvim_create_augroup("SqlrunForwardSweep", { clear = true })
