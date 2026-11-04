@@ -2,6 +2,7 @@ local forward = require("sqlrun.forward")
 
 local registry_root
 local real_registry_root
+local pid_dir
 
 local function owner_file(service)
 	return registry_root .. "/" .. service
@@ -60,6 +61,46 @@ local function rewrite_record(service, line_index, value)
 	local lines = vim.fn.readfile(owner_file(service))
 	lines[line_index] = value
 	vim.fn.writefile(lines, owner_file(service))
+end
+
+local function cmdline_of(pid)
+	local file = io.open("/proc/" .. pid .. "/cmdline", "r")
+	if not file then
+		return nil
+	end
+	local content = file:read("*a")
+	file:close()
+	return (content:gsub("%z", " "))
+end
+
+local function any_process_with_cmdline(prefix)
+	for _, entry in ipairs(vim.fn.readdir("/proc")) do
+		if tonumber(entry) then
+			local cmdline = cmdline_of(entry)
+			if cmdline and cmdline:sub(1, #prefix) == prefix then
+				return entry
+			end
+		end
+	end
+	return nil
+end
+
+local function free_port()
+	local server = vim.uv.new_tcp()
+	server:bind("127.0.0.1", 0)
+	local bound = server:getsockname()
+	server:close()
+	return bound.port
+end
+
+local function listener_pre_cmd(pid_path, port, bind_delay_seconds)
+	return "python3 -c \"import os,time,socket; f=open('"
+		.. pid_path
+		.. "','w'); f.write(str(os.getpid())); f.close(); time.sleep("
+		.. bind_delay_seconds
+		.. "); s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', "
+		.. port
+		.. ')); s.listen(1); time.sleep(30)"'
 end
 
 describe("owner protocol", function()
@@ -222,12 +263,18 @@ end)
 describe("session lifecycle", function()
 	before_each(function()
 		real_registry_root = vim.fs.normalize(vim.fn.stdpath("cache")) .. "/sqlrun-forward"
+		pid_dir = vim.fs.normalize(vim.fn.tempname()) .. ".pids"
+		vim.fn.mkdir(pid_dir, "p")
 	end)
 
 	after_each(function()
-		for _, service in ipairs({ "svc-live", "svc-recovery" }) do
+		for _, service in ipairs({ "svc-live", "svc-recovery", "svc-early", "svc-exit", "svc-blocked" }) do
 			pcall(vim.uv.fs_unlink, real_registry_root .. "/" .. service)
 		end
+		if vim.fn.filereadable(real_registry_root) == 1 then
+			vim.fn.delete(real_registry_root)
+		end
+		vim.fn.delete(pid_dir, "rf")
 	end)
 
 	it("fills session state from a raising pre_cmd and kills it on shutdown", function()
@@ -306,5 +353,92 @@ describe("session lifecycle", function()
 		end))
 		vim.notify = original_notify
 		assert.is_false(warn_present(warns, "already being prepared"))
+	end)
+
+	it("kills a spawn pending readiness on shutdown and suppresses late callbacks", function()
+		local port = free_port()
+		local pid_path = pid_dir .. "/early.pid"
+		local events = { ready = 0, failed = 0 }
+		forward.ensure_forward(
+			"svc-early",
+			{ port = port, pre_cmd = listener_pre_cmd(pid_path, port, 1.5), probe_timeout_ms = 600 },
+			function()
+				events.ready = events.ready + 1
+			end,
+			function()
+				events.failed = events.failed + 1
+			end
+		)
+		assert.is_true(vim.wait(5000, function()
+			return vim.fn.filereadable(pid_path) == 1
+		end))
+		assert.is_true(vim.fn.filereadable(real_owner_file("svc-early")) == 1)
+		local listener_pid = tonumber(vim.fn.readfile(pid_path)[1])
+		forward.shutdown()
+		assert.is_true(vim.wait(2000, function()
+			return not process_exists(listener_pid)
+		end))
+		assert.is_false(vim.fn.filereadable(real_owner_file("svc-early")) == 1)
+		assert.is_false(vim.wait(3500, function()
+			return events.ready > 0 or events.failed > 0
+		end))
+		assert.same({ ready = 0, failed = 0 }, events)
+		assert.is_false(vim.fn.filereadable(real_owner_file("svc-early")) == 1)
+		local warns, original_notify = capture_notifications(vim.log.levels.WARN)
+		forward.shutdown()
+		vim.notify = original_notify
+		assert.same({}, warns)
+	end)
+
+	it("leaves nothing behind when the spawned pre_cmd exits before the port comes up", function()
+		local port = free_port()
+		local failed_count = 0
+		forward.ensure_forward(
+			"svc-exit",
+			{ port = port, pre_cmd = "true", probe_timeout_ms = 500 },
+			function() end,
+			function()
+				failed_count = failed_count + 1
+			end
+		)
+		assert.is_true(vim.wait(5000, function()
+			return failed_count > 0
+		end))
+		assert.is_false(vim.fn.filereadable(real_owner_file("svc-exit")) == 1)
+		assert.is_false(vim.fn.filereadable(real_owner_file("svc-exit") .. "." .. vim.uv.getpid() .. ".tmp") == 1)
+		local warns, original_notify = capture_notifications(vim.log.levels.WARN)
+		forward.shutdown()
+		vim.notify = original_notify
+		assert.same({}, warns)
+	end)
+
+	it("surfaces a record write failure and cleans up the spawned process", function()
+		vim.fn.mkdir(real_owner_file("svc-blocked"), "p")
+		local port = free_port()
+		local errors = {}
+		local original_notify = vim.notify
+		vim.notify = function(message, level)
+			if level == vim.log.levels.ERROR then
+				table.insert(errors, message)
+			end
+		end
+		local failed_count = 0
+		forward.ensure_forward(
+			"svc-blocked",
+			{ port = port, pre_cmd = "sleep 30", probe_timeout_ms = 800 },
+			function() end,
+			function()
+				failed_count = failed_count + 1
+			end
+		)
+		assert.is_true(vim.wait(5000, function()
+			return failed_count > 0
+		end))
+		vim.notify = original_notify
+		assert.truthy(warn_present(errors, "cannot move"))
+		assert.is_false(vim.fn.filereadable(real_owner_file("svc-blocked") .. "." .. vim.uv.getpid() .. ".tmp") == 1)
+		assert.is_true(vim.wait(2000, function()
+			return any_process_with_cmdline("sleep 30 ") == nil
+		end))
 	end)
 end)
