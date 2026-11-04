@@ -78,12 +78,8 @@ local function open_picker(names, handler)
 				map("n", "q", cancel)
 				actions.select_default:replace(function()
 					local entry = action_state.get_selected_entry()
+					finish(entry and entry.value or nil)
 					actions.close(prompt_bufnr)
-					if entry then
-						finish(entry.value)
-					else
-						finish(nil)
-					end
 				end)
 				vim.api.nvim_create_autocmd("BufWipeout", {
 					buffer = prompt_bufnr,
@@ -120,10 +116,10 @@ end
 
 local function visual_type()
 	local mode = vim.fn.mode()
-	if mode:find("^V") then
+	if mode:find("^[VS]") then
 		return "V"
 	end
-	if mode:find("^\22") then
+	if mode:find("^[\22\19]") then
 		return "\22"
 	end
 	return "v"
@@ -139,7 +135,7 @@ end
 
 local function current_target()
 	local mode = vim.fn.mode()
-	if mode:find("^[vV\22]") then
+	if mode:find("^[vV\22sS\19]") then
 		local text = visual_selection()
 		if not text or text == "" then
 			vim.notify("sqlrun: empty visual selection", vim.log.levels.WARN)

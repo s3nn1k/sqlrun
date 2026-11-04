@@ -60,6 +60,100 @@ local function result_header()
 	return vim.fn.getbufline(buf, 1)[1]
 end
 
+local function spawned_inline_command()
+	for index, arg in ipairs(last_argv) do
+		if arg == "-c" then
+			return last_argv[index + 1]
+		end
+	end
+	return nil
+end
+
+local function spawns_file()
+	return vim.tbl_contains(last_argv, "-f")
+end
+
+local function feed_keys(keys)
+	vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "mx", false)
+end
+
+local function stub_telescope(prompt_bufnr, close)
+	local module_names = {
+		"telescope.pickers",
+		"telescope.actions",
+		"telescope.actions.state",
+		"telescope.finders",
+		"telescope.config",
+	}
+	local saved_modules = {}
+	for _, name in ipairs(module_names) do
+		saved_modules[name] = package.loaded[name]
+	end
+	local mappings = {}
+	package.loaded["telescope.pickers"] = {
+		new = function(_, picker_options)
+			return {
+				find = function()
+					picker_options.attach_mappings(prompt_bufnr, function(mode, key, callback)
+						mappings[mode .. ":" .. key] = callback
+					end)
+				end,
+			}
+		end,
+	}
+	package.loaded["telescope.actions"] = {
+		close = close,
+		select_default = {
+			replace = function(_, callback)
+				mappings.select_default = callback
+			end,
+		},
+	}
+	package.loaded["telescope.actions.state"] = {
+		get_selected_entry = function()
+			return { value = "svc" }
+		end,
+	}
+	package.loaded["telescope.finders"] = {
+		new_table = function(options)
+			return options
+		end,
+	}
+	package.loaded["telescope.config"] = {
+		values = {
+			generic_sorter = function()
+				return {}
+			end,
+		},
+	}
+	local function restore()
+		for _, name in ipairs(module_names) do
+			package.loaded[name] = saved_modules[name]
+		end
+	end
+	return mappings, restore
+end
+
+local function run_select_mode_selection(keys, expected_mode, expected_text)
+	vim.g.sqlrun_service = nil
+	vim.b.sqlrun_service = nil
+	stub_system()
+	sqlrun.pick_service = function(callback)
+		callback("svc")
+	end
+	local file = write_file("sel-mode.sql", { "select 1", "select 2" })
+	vim.cmd("edit " .. vim.fn.fnameescape(file))
+	vim.api.nvim_win_set_cursor(0, { 1, 0 })
+	feed_keys(keys)
+	assert.same(expected_mode, vim.fn.mode())
+
+	sqlrun.run()
+
+	assert.is_false(spawns_file())
+	assert.same(expected_text, spawned_inline_command())
+	last_exit_callback({ code = 0, stdout = "", stderr = "" })
+end
+
 describe("run", function()
 	before_each(function()
 		tmp_root = vim.fs.normalize(vim.fn.tempname())
@@ -225,15 +319,8 @@ describe("run", function()
 
 		sqlrun.run()
 
-		local command_index
-		for index, arg in ipairs(last_argv) do
-			if arg == "-c" then
-				command_index = index
-				break
-			end
-		end
-		assert.is_not_nil(command_index)
-		assert.same("select 1\nselect 2", last_argv[command_index + 1])
+		assert.is_false(spawns_file())
+		assert.same("select 1\nselect 2", spawned_inline_command())
 		last_exit_callback({ code = 0, stdout = "", stderr = "" })
 	end)
 
@@ -257,59 +344,17 @@ describe("run", function()
 		last_exit_callback({ code = 0, stdout = "", stderr = "" })
 	end)
 
+	it("runs linewise, charwise and blockwise select-mode selections instead of the file", function()
+		run_select_mode_selection("gH", "S", "select 1")
+		run_select_mode_selection("gh<End>", "s", "select 1")
+		run_select_mode_selection("g<C-H>", "\19", "s")
+	end)
+
 	it("keeps insert q searchable and finishes picker cancellation once", function()
-		local module_names = {
-			"telescope.pickers",
-			"telescope.actions",
-			"telescope.actions.state",
-			"telescope.finders",
-			"telescope.config",
-		}
-		local saved_modules = {}
-		for _, name in ipairs(module_names) do
-			saved_modules[name] = package.loaded[name]
-		end
-		local mappings = {}
-		local selected_calls = 0
+		local mappings, restore_telescope = stub_telescope(1, function() end)
 		local wipeout_callback
 		local finished = 0
 		local selected_service
-		package.loaded["telescope.pickers"] = {
-			new = function(_, picker_options)
-				return {
-					find = function()
-						picker_options.attach_mappings(1, function(mode, key, callback)
-							mappings[mode .. ":" .. key] = callback
-						end)
-					end,
-				}
-			end,
-		}
-		package.loaded["telescope.actions"] = {
-			close = function() end,
-			select_default = {
-				replace = function(_, callback)
-					mappings.select_default = callback
-				end,
-			},
-		}
-		package.loaded["telescope.actions.state"] = {
-			get_selected_entry = function()
-				return { value = "svc" }
-			end,
-		}
-		package.loaded["telescope.finders"] = {
-			new_table = function(options)
-				return options
-			end,
-		}
-		package.loaded["telescope.config"] = {
-			values = {
-				generic_sorter = function()
-					return {}
-				end,
-			},
-		}
 		local original_autocmd = vim.api.nvim_create_autocmd
 		vim.api.nvim_create_autocmd = function(_, options)
 			wipeout_callback = options.callback
@@ -322,9 +367,8 @@ describe("run", function()
 		mappings["n:q"]()
 		wipeout_callback()
 		vim.api.nvim_create_autocmd = original_autocmd
-		for _, name in ipairs(module_names) do
-			package.loaded[name] = saved_modules[name]
-		end
+		mappings.select_default()
+		restore_telescope()
 
 		assert.is_nil(mappings["i:q"])
 		assert.truthy(mappings["i:<esc>"])
@@ -332,8 +376,30 @@ describe("run", function()
 		assert.truthy(mappings["n:<esc>"])
 		assert.truthy(mappings["n:<C-c>"])
 		assert.truthy(mappings["n:q"])
-		mappings.select_default()
 		assert.same(1, finished)
 		assert.is_nil(selected_service)
+	end)
+
+	it("delivers the selection when closing wipes the prompt buffer synchronously", function()
+		vim.g.sqlrun_service = nil
+		vim.b.sqlrun_service = nil
+		local prompt_bufnr = vim.api.nvim_create_buf(false, true)
+		local mappings, restore_telescope = stub_telescope(prompt_bufnr, function(bufnr)
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+		end)
+		stub_system()
+		local file = write_file("q7.sql", { "select 1" })
+		vim.cmd("edit " .. vim.fn.fnameescape(file))
+
+		sqlrun.run()
+		mappings.select_default()
+		restore_telescope()
+
+		assert.same("psql", last_argv[1])
+		assert.truthy(vim.tbl_contains(last_argv, "service=svc"))
+		assert.truthy(vim.tbl_contains(last_argv, "-f"))
+		assert.truthy(vim.tbl_contains(last_argv, file))
+		assert.equal(0, vim.fn.bufexists(prompt_bufnr))
+		last_exit_callback({ code = 0, stdout = "", stderr = "" })
 	end)
 end)
