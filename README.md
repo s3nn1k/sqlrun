@@ -15,7 +15,9 @@ split.
   (VimEnter sweep, VimLeavePre shutdown).
 - Result buffer `sqlrun://result` shows service, source, timing, status; stderr and
   non-zero exits render as errors; output is capped by `max_lines`; `q` closes the window
-  and the next run reuses it.
+  and the next run reuses it. The buffer is read-only; `<C-s>` saves it to a file - next
+  to the query file by default (`<query>.<service>.result.txt`), timestamped under
+  `stdpath("data")/sqlrun` for selections; the path is editable in the prompt.
 
 ## Dependencies
 
