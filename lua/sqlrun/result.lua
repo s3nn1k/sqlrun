@@ -13,11 +13,11 @@ function M.default_result_path(service, source, data_dir, timestamp)
 		local dir = vim.fn.fnamemodify(source, ":h")
 		return vim.fs.joinpath(dir, stem .. "." .. service .. ".result.txt")
 	end
-	vim.fn.mkdir(data_dir, "p")
 	return vim.fs.joinpath(data_dir, stamp .. "." .. service .. ".result.txt")
 end
 
 function M.save_to(path, buf)
+	vim.fn.mkdir(vim.fs.dirname(path), "p")
 	vim.fn.writefile(vim.api.nvim_buf_get_lines(buf, 0, -1, false), path)
 end
 
