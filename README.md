@@ -50,23 +50,20 @@ section per service with `port` and an optional quoted `pre_cmd` - exactly one c
 	keys = {
 		{ "<leader>X", function() require("sqlrun").run() end, mode = { "n", "v" }, desc = "sqlrun: run query" },
 	},
-	init = function()
-		local group = vim.api.nvim_create_augroup("SqlrunForwardSweep", { clear = true })
-		vim.api.nvim_create_autocmd("VimEnter", {
-			group = group,
-			callback = function()
-				require("sqlrun").sweep()
-			end,
-		})
-		vim.api.nvim_create_autocmd("VimLeavePre", {
-			group = group,
-			callback = function()
-				require("sqlrun").shutdown()
-			end,
-		})
-	end,
 }
 ```
+
+## Lifecycle
+
+The bundled `plugin/sqlrun.lua` entry keeps the forward registry clean on its own: it
+sweeps stale forwards on `VimEnter` - or immediately when the plugin lazy-loads after
+startup - and kills this session's forwards on `VimLeavePre`.
+
+- Set `vim.g.sqlrun_disable_auto = 1` before the plugin loads to opt out and call
+  `require("sqlrun").sweep()` and `require("sqlrun").shutdown()` manually.
+- Every run emits two `User` events: `SqlrunRunStart` right after the service is picked
+  and `SqlrunRunDone` after the result is rendered. `vim.g.sqlrun_last_status` carries the
+  done status ("ok" or "error").
 
 ## Gates
 

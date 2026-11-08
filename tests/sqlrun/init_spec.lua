@@ -73,6 +73,27 @@ local function spawns_file()
 	return vim.tbl_contains(last_argv, "-f")
 end
 
+local function drain_scheduled_events()
+	vim.wait(100, function()
+		return false
+	end, 1)
+end
+
+local function capture_run_events()
+	local event_log = {}
+	vim.api.nvim_create_augroup("SqlrunRunEvents", { clear = true })
+	for _, pattern in ipairs({ "SqlrunRunStart", "SqlrunRunDone" }) do
+		vim.api.nvim_create_autocmd("User", {
+			group = "SqlrunRunEvents",
+			pattern = pattern,
+			callback = function()
+				table.insert(event_log, { pattern = pattern, status = vim.g.sqlrun_last_status })
+			end,
+		})
+	end
+	return event_log
+end
+
 local function feed_keys(keys)
 	vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "mx", false)
 end
@@ -182,6 +203,8 @@ describe("run", function()
 		restore_pgservicefile()
 		vim.g.sqlrun_service = nil
 		vim.b.sqlrun_service = nil
+		vim.g.sqlrun_last_status = nil
+		pcall(vim.api.nvim_del_augroup_by_name, "SqlrunRunEvents")
 		cleanup_result()
 		vim.fn.delete(tmp_root, "rf")
 	end)
@@ -378,6 +401,60 @@ describe("run", function()
 		assert.truthy(mappings["n:q"])
 		assert.same(1, finished)
 		assert.is_nil(selected_service)
+	end)
+
+	it("emits SqlrunRunStart before psql and SqlrunRunDone with ok status", function()
+		drain_scheduled_events()
+		stub_system()
+		local event_log = capture_run_events()
+		local spawn_marker
+		local stubbed_system = vim.system
+		vim.system = function(argv, opts, on_exit)
+			spawn_marker = #event_log
+			return stubbed_system(argv, opts, on_exit)
+		end
+		sqlrun.pick_service = function(callback)
+			callback("svc")
+		end
+		local file = write_file("q8.sql", { "select 1" })
+		vim.cmd("edit " .. vim.fn.fnameescape(file))
+
+		sqlrun.run()
+
+		assert.same(1, #event_log)
+		assert.equals("SqlrunRunStart", event_log[1].pattern)
+		assert.equals(1, spawn_marker)
+
+		last_exit_callback({ code = 0, stdout = "2\n", stderr = "" })
+
+		assert.is_true(vim.wait(500, function()
+			return #event_log == 2
+		end))
+		assert.equals("SqlrunRunDone", event_log[2].pattern)
+		assert.equals("ok", event_log[2].status)
+		assert.equals("ok", vim.g.sqlrun_last_status)
+	end)
+
+	it("marks SqlrunRunDone as error on a failing psql exit", function()
+		drain_scheduled_events()
+		stub_system()
+		local event_log = capture_run_events()
+		sqlrun.pick_service = function(callback)
+			callback("svc")
+		end
+		local file = write_file("q9.sql", { "select 1" })
+		vim.cmd("edit " .. vim.fn.fnameescape(file))
+
+		sqlrun.run()
+
+		last_exit_callback({ code = 2, stdout = "", stderr = "boom\n" })
+
+		assert.is_true(vim.wait(500, function()
+			return #event_log == 2
+		end))
+		assert.equals("SqlrunRunDone", event_log[2].pattern)
+		assert.equals("error", event_log[2].status)
+		assert.equals("error", vim.g.sqlrun_last_status)
 	end)
 
 	it("delivers the selection when closing wipes the prompt buffer synchronously", function()

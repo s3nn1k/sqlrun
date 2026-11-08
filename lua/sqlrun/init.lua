@@ -200,6 +200,8 @@ local function execute(service, target)
 					stderr = done.stderr,
 					max_lines = config.max_lines,
 				})
+				vim.g.sqlrun_last_status = done.code == 0 and "ok" or "error"
+				vim.api.nvim_exec_autocmds("User", { pattern = "SqlrunRunDone", modeline = false })
 			end)
 		end
 	)
@@ -210,6 +212,7 @@ local function execute(service, target)
 end
 
 local function start_query(service, target)
+	vim.api.nvim_exec_autocmds("User", { pattern = "SqlrunRunStart", modeline = false })
 	local connections = ini.read_connections(config.connections_path)
 	if connections and connections[service] then
 		local pg_service = ini.read_pg_service(config.pg_service_path)
