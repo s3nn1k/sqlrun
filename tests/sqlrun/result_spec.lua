@@ -143,7 +143,10 @@ describe("window placement", function()
 		assert.equal(vim.o.columns, vim.api.nvim_win_get_width(win))
 		local row = vim.api.nvim_win_get_position(win)[1]
 		assert.is_true(row > split_row)
-		assert.equal(vim.o.lines - 1, row + vim.api.nvim_win_get_height(win))
+		-- screen geometry (cmdheight/laststatus) differs across environments; the
+		-- bottom claim is "last window in the tabpage", not an exact row number
+		local wins = vim.api.nvim_tabpage_list_wins(0)
+		assert.equal(win, wins[#wins])
 	end)
 end)
 
