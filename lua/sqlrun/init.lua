@@ -14,6 +14,13 @@ local defaults = {
 local config = vim.deepcopy(defaults)
 local running = false
 
+local known_setup_keys = {
+	pg_service_path = "string",
+	connections_path = "string",
+	max_lines = "number",
+	probe_timeout_ms = "number",
+}
+
 local function notify_error(message)
 	vim.notify("sqlrun: " .. message, vim.log.levels.ERROR)
 end
@@ -23,6 +30,14 @@ local function expand_path(path)
 end
 
 function M.setup(opts)
+	for key, value in pairs(opts or {}) do
+		local expected_type = known_setup_keys[key]
+		if expected_type then
+			vim.validate(key, value, expected_type)
+		else
+			vim.notify_once("sqlrun: unknown setup key: " .. tostring(key), vim.log.levels.WARN)
+		end
+	end
 	config = vim.tbl_deep_extend("force", defaults, opts or {})
 end
 

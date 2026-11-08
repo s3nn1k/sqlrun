@@ -1,0 +1,30 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Neovim stable
+        run: |
+          curl -L https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz | tar -xz -C /tmp
+          sudo ln -sf /tmp/nvim-linux-x86_64/bin/nvim /usr/local/bin/nvim
+
+      - name: Install StyLua
+        run: |
+          curl -L https://github.com/JohnnyMorganz/StyLua/releases/latest/download/stylua-linux-x86_64.zip -o /tmp/stylua.zip
+          unzip /tmp/stylua.zip -d /tmp/stylua
+          sudo install /tmp/stylua/stylua /usr/local/bin/stylua
+
+      - name: Install plenary.nvim
+        run: git clone --depth 1 https://github.com/nvim-lua/plenary.nvim /tmp/plenary
+
+      - name: Gates
+        run: SQLRUN_PLENARY=/tmp/plenary make fmt lint test smoke

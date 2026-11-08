@@ -19,6 +19,12 @@ split.
   to the query file by default (`<query>.<service>.result.txt`), timestamped under
   `stdpath("data")/sqlrun` for selections; the path is editable in the prompt.
 
+## Requirements
+
+- Neovim >= 0.10
+- Linux first (process identity via `/proc/<pid>/stat`); macOS falls back to
+  `ps -o lstart=`; Windows unsupported.
+
 ## Dependencies
 
 - `psql` - query execution
@@ -45,6 +51,7 @@ section per service with `port` and an optional quoted `pre_cmd` - exactly one c
 ```lua
 {
 	"s3nn1k/sqlrun",
+	version = "*",
 	ft = { "sql" },
 	dependencies = { "nvim-telescope/telescope.nvim" },
 	keys = {

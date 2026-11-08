@@ -480,3 +480,50 @@ describe("run", function()
 		last_exit_callback({ code = 0, stdout = "", stderr = "" })
 	end)
 end)
+
+describe("setup", function()
+	local original_notify_once
+	local warned
+
+	before_each(function()
+		original_notify_once = vim.notify_once
+		warned = {}
+		vim.notify_once = function(message, level)
+			table.insert(warned, { message = message, level = level })
+		end
+	end)
+
+	after_each(function()
+		vim.notify_once = original_notify_once
+	end)
+
+	it("tolerates nil opts", function()
+		sqlrun.setup(nil)
+		assert.same({}, warned)
+	end)
+
+	it("accepts the four known keys with correct types", function()
+		sqlrun.setup({
+			pg_service_path = "/tmp/pg.conf",
+			connections_path = "/tmp/connections.toml",
+			max_lines = 100,
+			probe_timeout_ms = 1000,
+		})
+		assert.same({}, warned)
+	end)
+
+	it("rejects a wrong type loudly", function()
+		local ok, err = pcall(sqlrun.setup, { max_lines = "many" })
+		assert.is_false(ok)
+		assert.truthy(err:find("max_lines", 1, true))
+		assert.same({}, warned)
+	end)
+
+	it("warns once on unknown keys", function()
+		sqlrun.setup({ max_lines = 10, unknown_key = true })
+		assert.equals(1, #warned)
+		assert.truthy(warned[1].message:find("unknown_key", 1, true))
+		assert.truthy(warned[1].message:find("^sqlrun:"))
+		assert.equals(vim.log.levels.WARN, warned[1].level)
+	end)
+end)
