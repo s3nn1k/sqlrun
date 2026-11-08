@@ -237,7 +237,9 @@ describe("run", function()
 	end)
 
 	it("resets the busy guard when psql cannot be spawned", function()
+		drain_scheduled_events()
 		stub_system()
+		local event_log = capture_run_events()
 		sqlrun.pick_service = function(callback)
 			callback("svc")
 		end
@@ -247,6 +249,11 @@ describe("run", function()
 
 		sqlrun.run()
 
+		assert.same(2, #event_log)
+		assert.equals("SqlrunRunStart", event_log[1].pattern)
+		assert.equals("SqlrunRunDone", event_log[2].pattern)
+		assert.equals("error", event_log[2].status)
+		assert.equals("error", vim.g.sqlrun_last_status)
 		local errors = vim.tbl_filter(function(call)
 			return call.level == vim.log.levels.ERROR
 		end, notify_calls)
@@ -455,6 +462,35 @@ describe("run", function()
 		assert.equals("SqlrunRunDone", event_log[2].pattern)
 		assert.equals("error", event_log[2].status)
 		assert.equals("error", vim.g.sqlrun_last_status)
+	end)
+
+	it("pairs SqlrunRunDone with Start and marks error on a consistency failure", function()
+		drain_scheduled_events()
+		stub_system()
+		local event_log = capture_run_events()
+		write_file("connections.toml", { "[svc]", "port=9999" })
+		sqlrun.setup({
+			pg_service_path = tmp_root .. "/pg_service.conf",
+			connections_path = tmp_root .. "/connections.toml",
+		})
+		sqlrun.pick_service = function(callback)
+			callback("svc")
+		end
+		local file = write_file("q10.sql", { "select 1" })
+		vim.cmd("edit " .. vim.fn.fnameescape(file))
+
+		sqlrun.run()
+
+		assert.same(2, #event_log)
+		assert.equals("SqlrunRunStart", event_log[1].pattern)
+		assert.equals("SqlrunRunDone", event_log[2].pattern)
+		assert.equals("error", event_log[2].status)
+		assert.equals("error", vim.g.sqlrun_last_status)
+		local errors = vim.tbl_filter(function(call)
+			return call.level == vim.log.levels.ERROR
+		end, notify_calls)
+		assert.same(1, #errors)
+		assert.is_nil(last_argv)
 	end)
 
 	it("delivers the selection when closing wipes the prompt buffer synchronously", function()

@@ -25,6 +25,13 @@ local function notify_error(message)
 	vim.notify("sqlrun: " .. message, vim.log.levels.ERROR)
 end
 
+local function fail_with_error(message)
+	running = false
+	vim.g.sqlrun_last_status = "error"
+	vim.api.nvim_exec_autocmds("User", { pattern = "SqlrunRunDone", modeline = false })
+	notify_error(message)
+end
+
 local function expand_path(path)
 	return vim.fs.normalize(vim.fn.expand(path))
 end
@@ -221,8 +228,7 @@ local function execute(service, target)
 		end
 	)
 	if not ok then
-		running = false
-		notify_error("cannot run psql: " .. tostring(spawn_or_err))
+		fail_with_error("cannot run psql: " .. tostring(spawn_or_err))
 	end
 end
 
@@ -233,8 +239,7 @@ local function start_query(service, target)
 		local pg_service = ini.read_pg_service(config.pg_service_path)
 		local consistency_error = ini.validate_consistency(connections, pg_service)
 		if consistency_error then
-			running = false
-			notify_error(consistency_error)
+			fail_with_error(consistency_error)
 			return
 		end
 		local section = connections[service]
@@ -248,15 +253,13 @@ local function start_query(service, target)
 			running = false
 		end)
 		if not ensured then
-			running = false
-			notify_error("forward check failed: " .. tostring(ensure_err))
+			fail_with_error("forward check failed: " .. tostring(ensure_err))
 		end
 		return
 	end
 	local pg_service = ini.read_pg_service(config.pg_service_path)
 	if not pg_service or not pg_service[service] then
-		running = false
-		notify_error("service " .. service .. " not found in pg_service or connections")
+		fail_with_error("service " .. service .. " not found in pg_service or connections")
 		return
 	end
 	execute(service, target)

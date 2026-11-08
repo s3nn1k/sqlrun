@@ -69,8 +69,8 @@ startup - and kills this session's forwards on `VimLeavePre`.
 - Set `vim.g.sqlrun_disable_auto = 1` before the plugin loads to opt out and call
   `require("sqlrun").sweep()` and `require("sqlrun").shutdown()` manually.
 - Every run emits two `User` events: `SqlrunRunStart` right after the service is picked
-  and `SqlrunRunDone` after the result is rendered. `vim.g.sqlrun_last_status` carries the
-  done status ("ok" or "error").
+  and `SqlrunRunDone` when the run finishes - after the result is rendered, or as soon as
+  it fails. `vim.g.sqlrun_last_status` carries the done status ("ok" or "error").
 
 ## Gates
 
