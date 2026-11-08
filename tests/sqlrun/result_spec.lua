@@ -114,6 +114,39 @@ describe("show", function()
 	end)
 end)
 
+describe("window placement", function()
+	after_each(function()
+		local buf = vim.fn.bufnr("sqlrun://result")
+		if buf > 0 then
+			for _, win in ipairs(vim.fn.win_findbuf(buf)) do
+				pcall(vim.api.nvim_win_close, win, true)
+			end
+			pcall(vim.api.nvim_buf_delete, buf, { force = true })
+		end
+		pcall(vim.cmd, "only")
+	end)
+
+	it("opens the result full-width at the bottom despite a vertical split", function()
+		vim.cmd("vsplit")
+		local split_row = vim.api.nvim_win_get_position(vim.api.nvim_get_current_win())[1]
+
+		local win = result.show({
+			service = "svc",
+			source = "q.sql",
+			elapsed_seconds = 0.01,
+			code = 0,
+			stdout = "ok",
+			stderr = "",
+			max_lines = 2000,
+		})
+
+		assert.equal(vim.o.columns, vim.api.nvim_win_get_width(win))
+		local row = vim.api.nvim_win_get_position(win)[1]
+		assert.is_true(row > split_row)
+		assert.equal(vim.o.lines - 1, row + vim.api.nvim_win_get_height(win))
+	end)
+end)
+
 describe("default_result_path", function()
 	it("puts the file next to a file source with the service inserted", function()
 		local path = result.default_result_path("svc", "/tmp/queries/q.sql", "/tmp/data", "20260102-030405")

@@ -72,8 +72,7 @@ local function open_window(buf)
 			return win
 		end
 	end
-	local current = vim.api.nvim_get_current_win()
-	return vim.api.nvim_open_win(buf, false, { split = "below", win = current })
+	return vim.api.nvim_open_win(buf, false, { split = "below", win = -1 })
 end
 
 local function render(lines, service, source)
