@@ -40,6 +40,7 @@ All `setup()` keys are optional:
 - `connections_path` - `"~/credentials/postgres/connections.toml"`
 - `max_lines` - `2000`
 - `probe_timeout_ms` - `15000`
+- `result_keymaps` - `{ close = "q", save = "<C-s>" }`; each field is a buffer-local key lhs string, or `false` to not create the map
 
 The connections file uses INI-style sections despite the `.toml` name: one `[service]`
 section per service with `port` and an optional quoted `pre_cmd` - exactly one command

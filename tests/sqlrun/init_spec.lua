@@ -476,6 +476,28 @@ describe("run", function()
 		assert.is_nil(last_argv)
 	end)
 
+	it("applies configured result keymaps to the result buffer", function()
+		vim.g.sqlrun_service = nil
+		vim.b.sqlrun_service = nil
+		sqlrun.setup({
+			pg_service_path = tmp_root .. "/pg_service.conf",
+			connections_path = tmp_root .. "/missing-connections.toml",
+			result_keymaps = { close = "Z", save = false },
+		})
+		run_with_stubbed_picker("q11.sql")
+		last_exit_callback({ code = 0, stdout = "2\n", stderr = "" })
+		assert.is_true(vim.wait(500, function()
+			return result_header() ~= nil
+		end))
+		local lhs_set = {}
+		for _, map in ipairs(vim.api.nvim_buf_get_keymap(vim.fn.bufnr("sqlrun://result"), "n")) do
+			lhs_set[map.lhs:upper()] = true
+		end
+		assert.truthy(lhs_set["Z"])
+		assert.is_nil(lhs_set["Q"])
+		assert.is_nil(lhs_set["<C-S>"])
+	end)
+
 	it("delivers the selection when closing wipes the prompt buffer synchronously", function()
 		vim.g.sqlrun_service = nil
 		vim.b.sqlrun_service = nil
@@ -521,14 +543,21 @@ describe("setup", function()
 		assert.same({}, warned)
 	end)
 
-	it("accepts the four known keys with correct types", function()
+	it("accepts the known keys with correct types", function()
 		sqlrun.setup({
 			pg_service_path = "/tmp/pg.conf",
 			connections_path = "/tmp/connections.toml",
 			max_lines = 100,
 			probe_timeout_ms = 1000,
+			result_keymaps = { close = "Z", save = false },
 		})
 		assert.same({}, warned)
+	end)
+
+	it("rejects a non-string non-false result keymap field loudly", function()
+		local ok, err = pcall(sqlrun.setup, { result_keymaps = { close = 3 } })
+		assert.is_false(ok)
+		assert.truthy(err:find("result_keymaps.close", 1, true))
 	end)
 
 	it("rejects a wrong type loudly", function()

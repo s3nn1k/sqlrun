@@ -1,5 +1,7 @@
 local M = {}
 
+M.default_keymaps = { close = "q", save = "<C-s>" }
+
 local buffer_name = "sqlrun://result"
 
 local function result_timestamp()
@@ -43,26 +45,31 @@ local function save_result(buf)
 	end
 end
 
-local function ensure_buffer()
+local function ensure_buffer(keymaps)
 	local buf = vim.fn.bufnr(buffer_name)
 	if buf > 0 then
 		return buf
 	end
+	local resolved = vim.tbl_extend("force", M.default_keymaps, keymaps or {})
 	buf = vim.api.nvim_create_buf(false, true)
 	vim.api.nvim_buf_set_name(buf, buffer_name)
 	vim.bo[buf].bufhidden = "hide"
 	vim.bo[buf].buftype = "nofile"
 	vim.bo[buf].filetype = "sqlrun"
 	vim.bo[buf].swapfile = false
-	vim.keymap.set("n", "q", function()
-		local win = vim.fn.win_findbuf(buf)[1]
-		if win and vim.api.nvim_win_is_valid(win) then
-			vim.api.nvim_win_close(win, true)
-		end
-	end, { buffer = buf, desc = "sqlrun: close result" })
-	vim.keymap.set("n", "<C-s>", function()
-		save_result(buf)
-	end, { buffer = buf, desc = "sqlrun: save result" })
+	if resolved.close ~= false then
+		vim.keymap.set("n", resolved.close, function()
+			local win = vim.fn.win_findbuf(buf)[1]
+			if win and vim.api.nvim_win_is_valid(win) then
+				vim.api.nvim_win_close(win, true)
+			end
+		end, { buffer = buf, desc = "sqlrun: close result" })
+	end
+	if resolved.save ~= false then
+		vim.keymap.set("n", resolved.save, function()
+			save_result(buf)
+		end, { buffer = buf, desc = "sqlrun: save result" })
+	end
 	return buf
 end
 
@@ -75,8 +82,8 @@ local function open_window(buf)
 	return vim.api.nvim_open_win(buf, false, { split = "below", win = -1 })
 end
 
-local function render(lines, service, source)
-	local buf = ensure_buffer()
+local function render(lines, service, source, keymaps)
+	local buf = ensure_buffer(keymaps)
 	vim.bo[buf].modifiable = true
 	vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
 	vim.bo[buf].modifiable = false
@@ -95,15 +102,15 @@ function M.truncate_lines(lines, max_lines)
 	return { lines = vim.list_slice(lines, 1, max_lines), truncated = true }
 end
 
-function M.open()
-	return open_window(ensure_buffer())
+function M.open(keymaps)
+	return open_window(ensure_buffer(keymaps))
 end
 
-function M.show_running(service, source)
+function M.show_running(service, source, keymaps)
 	return render({
 		"-- service: " .. service .. " | source: " .. source .. " | status: running...",
 		"",
-	}, service, source)
+	}, service, source, keymaps)
 end
 
 function M.show(done)
@@ -132,7 +139,7 @@ function M.show(done)
 		.. string.format("%.3fs", done.elapsed_seconds)
 		.. " | status: "
 		.. status
-	return render(vim.list_extend({ header, "" }, cut.lines), done.service, done.source)
+	return render(vim.list_extend({ header, "" }, cut.lines), done.service, done.source, done.result_keymaps)
 end
 
 return M

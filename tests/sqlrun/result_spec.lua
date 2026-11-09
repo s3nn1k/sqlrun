@@ -150,6 +150,61 @@ describe("window placement", function()
 	end)
 end)
 
+describe("result keymaps", function()
+	after_each(function()
+		local buf = vim.fn.bufnr("sqlrun://result")
+		if buf > 0 then
+			for _, win in ipairs(vim.fn.win_findbuf(buf)) do
+				pcall(vim.api.nvim_win_close, win, true)
+			end
+			pcall(vim.api.nvim_buf_delete, buf, { force = true })
+		end
+	end)
+
+	local function show_result(keymaps)
+		return result.show({
+			service = "svc",
+			source = "q.sql",
+			elapsed_seconds = 0.01,
+			code = 0,
+			stdout = "ok",
+			stderr = "",
+			max_lines = 2000,
+			result_keymaps = keymaps,
+		})
+	end
+
+	local function buffer_lhs(buf)
+		local lhs_set = {}
+		for _, map in ipairs(vim.api.nvim_buf_get_keymap(buf, "n")) do
+			lhs_set[map.lhs:upper()] = true
+		end
+		return lhs_set
+	end
+
+	it("creates the default close and save maps", function()
+		show_result(nil)
+		local lhs_set = buffer_lhs(vim.fn.bufnr("sqlrun://result"))
+		assert.truthy(lhs_set["Q"])
+		assert.truthy(lhs_set["<C-S>"])
+	end)
+
+	it("creates the configured close map and skips the save map on false", function()
+		show_result({ close = "Z", save = false })
+		local lhs_set = buffer_lhs(vim.fn.bufnr("sqlrun://result"))
+		assert.truthy(lhs_set["Z"])
+		assert.is_nil(lhs_set["Q"])
+		assert.is_nil(lhs_set["<C-S>"])
+	end)
+
+	it("keeps the maps out of normal buffers", function()
+		show_result(nil)
+		local normal = vim.api.nvim_create_buf(false, true)
+		assert.same({}, vim.api.nvim_buf_get_keymap(normal, "n"))
+		vim.api.nvim_buf_delete(normal, { force = true })
+	end)
+end)
+
 describe("default_result_path", function()
 	it("puts the file next to a file source with the service inserted", function()
 		local path = result.default_result_path("svc", "/tmp/queries/q.sql", "/tmp/data", "20260102-030405")

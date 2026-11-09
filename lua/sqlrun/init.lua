@@ -9,17 +9,22 @@ local defaults = {
 	connections_path = "~/credentials/postgres/connections.toml",
 	max_lines = 2000,
 	probe_timeout_ms = 15000,
+	result_keymaps = result.default_keymaps,
 }
 
 local config = vim.deepcopy(defaults)
 local running = false
 
-local known_setup_keys = {
-	pg_service_path = "string",
-	connections_path = "string",
-	max_lines = "number",
-	probe_timeout_ms = "number",
-}
+local known_setup_keys = {}
+for key, value in pairs(defaults) do
+	known_setup_keys[key] = type(value)
+end
+
+local result_keymap_fields = { "close", "save" }
+
+local function valid_keymap_lhs(value)
+	return type(value) == "string" or value == false
+end
 
 local function notify_error(message)
 	vim.notify("sqlrun: " .. message, vim.log.levels.ERROR)
@@ -43,6 +48,14 @@ function M.setup(opts)
 			vim.validate(key, value, expected_type)
 		else
 			vim.notify_once("sqlrun: unknown setup key: " .. tostring(key), vim.log.levels.WARN)
+		end
+	end
+	local keymaps = (opts or {}).result_keymaps
+	if keymaps ~= nil then
+		for _, field in ipairs(result_keymap_fields) do
+			if keymaps[field] ~= nil then
+				vim.validate("result_keymaps." .. field, keymaps[field], valid_keymap_lhs)
+			end
 		end
 	end
 	config = vim.tbl_deep_extend("force", defaults, opts or {})
@@ -195,9 +208,9 @@ local function psql_args(service, target, columns)
 end
 
 local function execute(service, target)
-	local win = result.open()
+	local win = result.open(config.result_keymaps)
 	local columns = vim.api.nvim_win_get_width(win)
-	result.show_running(service, target.source)
+	result.show_running(service, target.source, config.result_keymaps)
 	local started_at = vim.uv.hrtime()
 	local ok, spawn_or_err = pcall(
 		vim.system,
@@ -214,6 +227,7 @@ local function execute(service, target)
 					stdout = done.stdout,
 					stderr = done.stderr,
 					max_lines = config.max_lines,
+					result_keymaps = config.result_keymaps,
 				})
 				vim.g.sqlrun_last_status = done.code == 0 and "ok" or "error"
 				vim.api.nvim_exec_autocmds("User", { pattern = "SqlrunRunDone", modeline = false })
