@@ -560,6 +560,12 @@ describe("setup", function()
 		assert.truthy(err:find("result_keymaps.close", 1, true))
 	end)
 
+	it("rejects an empty result keymap lhs loudly", function()
+		local ok, err = pcall(sqlrun.setup, { result_keymaps = { close = "" } })
+		assert.is_false(ok)
+		assert.truthy(err:find("result_keymaps.close", 1, true))
+	end)
+
 	it("rejects a wrong type loudly", function()
 		local ok, err = pcall(sqlrun.setup, { max_lines = "many" })
 		assert.is_false(ok)

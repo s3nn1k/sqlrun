@@ -47,16 +47,20 @@ end
 
 local function ensure_buffer(keymaps)
 	local buf = vim.fn.bufnr(buffer_name)
-	if buf > 0 then
-		return buf
-	end
 	local resolved = vim.tbl_extend("force", M.default_keymaps, keymaps or {})
-	buf = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_buf_set_name(buf, buffer_name)
-	vim.bo[buf].bufhidden = "hide"
-	vim.bo[buf].buftype = "nofile"
-	vim.bo[buf].filetype = "sqlrun"
-	vim.bo[buf].swapfile = false
+	if buf > 0 then
+		local stale_lhs = { M.default_keymaps.close, M.default_keymaps.save, resolved.close, resolved.save }
+		for _, lhs in ipairs(stale_lhs) do
+			pcall(vim.keymap.del, "n", lhs, { buffer = buf })
+		end
+	else
+		buf = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_name(buf, buffer_name)
+		vim.bo[buf].bufhidden = "hide"
+		vim.bo[buf].buftype = "nofile"
+		vim.bo[buf].filetype = "sqlrun"
+		vim.bo[buf].swapfile = false
+	end
 	if resolved.close ~= false then
 		vim.keymap.set("n", resolved.close, function()
 			local win = vim.fn.win_findbuf(buf)[1]

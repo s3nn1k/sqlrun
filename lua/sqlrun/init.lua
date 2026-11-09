@@ -23,7 +23,7 @@ end
 local result_keymap_fields = { "close", "save" }
 
 local function valid_keymap_lhs(value)
-	return type(value) == "string" or value == false
+	return (type(value) == "string" and value ~= "") or value == false
 end
 
 local function notify_error(message)
