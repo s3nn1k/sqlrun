@@ -11,9 +11,7 @@ local function strip_quotes(value)
 end
 
 function M.parse_ini(text)
-	if text:sub(1, #utf8_bom) == utf8_bom then
-		text = text:sub(#utf8_bom + 1)
-	end
+	text = text:gsub("^" .. utf8_bom, "")
 	local sections = {}
 	local current = nil
 	for line in text:gmatch("[^\r\n]+") do
@@ -68,10 +66,9 @@ local function sanitize_sections(sections, path, source)
 	if #unsafe > 0 and not warned_sources[path] then
 		warned_sources[path] = true
 		table.sort(unsafe)
-		local listed = {}
-		for _, name in ipairs(unsafe) do
-			table.insert(listed, '"' .. name .. '"')
-		end
+		local listed = vim.tbl_map(function(name)
+			return '"' .. name .. '"'
+		end, unsafe)
 		vim.notify(
 			"sqlrun: skipping services with unsafe names in " .. source .. ": " .. table.concat(listed, ", "),
 			vim.log.levels.WARN

@@ -49,14 +49,7 @@ function M.setup(opts)
 end
 
 local function service_names(connections, pg_service)
-	local seen = {}
-	for name in pairs(connections or {}) do
-		seen[name] = true
-	end
-	for name in pairs(pg_service or {}) do
-		seen[name] = true
-	end
-	local names = vim.tbl_keys(seen)
+	local names = vim.tbl_keys(vim.tbl_extend("force", connections or {}, pg_service or {}))
 	table.sort(names)
 	return names
 end
