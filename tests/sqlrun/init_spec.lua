@@ -155,6 +155,17 @@ local function stub_telescope(prompt_bufnr, close)
 	return mappings, restore
 end
 
+local function run_with_stubbed_picker(file_name)
+	stub_system()
+	sqlrun.pick_service = function(callback)
+		callback("svc")
+	end
+	local file = write_file(file_name, { "select 1" })
+	vim.cmd("edit " .. vim.fn.fnameescape(file))
+	sqlrun.run()
+	return file
+end
+
 local function run_select_mode_selection(keys, expected_mode, expected_text)
 	vim.g.sqlrun_service = nil
 	vim.b.sqlrun_service = nil
@@ -238,16 +249,9 @@ describe("run", function()
 
 	it("resets the busy guard when psql cannot be spawned", function()
 		drain_scheduled_events()
-		stub_system()
-		local event_log = capture_run_events()
-		sqlrun.pick_service = function(callback)
-			callback("svc")
-		end
 		spawn_should_throw = true
-		local file = write_file("q2.sql", { "select 1" })
-		vim.cmd("edit " .. vim.fn.fnameescape(file))
-
-		sqlrun.run()
+		local event_log = capture_run_events()
+		run_with_stubbed_picker("q2.sql")
 
 		assert.same(2, #event_log)
 		assert.equals("SqlrunRunStart", event_log[1].pattern)
@@ -355,20 +359,13 @@ describe("run", function()
 	end)
 
 	it("uses the configured service file instead of ambient PGSERVICEFILE", function()
-		stub_system()
 		vim.fn.setenv("PGSERVICEFILE", tmp_root .. "/ambient.conf")
 		sqlrun.setup({
 			pg_service_path = tmp_root .. "/selected.conf",
 			connections_path = tmp_root .. "/missing-connections.toml",
 		})
 		write_file("selected.conf", { "[svc]", "port=15432" })
-		sqlrun.pick_service = function(callback)
-			callback("svc")
-		end
-		local file = write_file("q6.sql", { "select 1" })
-		vim.cmd("edit " .. vim.fn.fnameescape(file))
-
-		sqlrun.run()
+		run_with_stubbed_picker("q6.sql")
 
 		assert.same({ PGSERVICEFILE = vim.fs.normalize(tmp_root .. "/selected.conf") }, last_opts.env)
 		last_exit_callback({ code = 0, stdout = "", stderr = "" })
@@ -444,15 +441,8 @@ describe("run", function()
 
 	it("marks SqlrunRunDone as error on a failing psql exit", function()
 		drain_scheduled_events()
-		stub_system()
 		local event_log = capture_run_events()
-		sqlrun.pick_service = function(callback)
-			callback("svc")
-		end
-		local file = write_file("q9.sql", { "select 1" })
-		vim.cmd("edit " .. vim.fn.fnameescape(file))
-
-		sqlrun.run()
+		run_with_stubbed_picker("q9.sql")
 
 		last_exit_callback({ code = 2, stdout = "", stderr = "boom\n" })
 
@@ -466,20 +456,13 @@ describe("run", function()
 
 	it("pairs SqlrunRunDone with Start and marks error on a consistency failure", function()
 		drain_scheduled_events()
-		stub_system()
 		local event_log = capture_run_events()
 		write_file("connections.toml", { "[svc]", "port=9999" })
 		sqlrun.setup({
 			pg_service_path = tmp_root .. "/pg_service.conf",
 			connections_path = tmp_root .. "/connections.toml",
 		})
-		sqlrun.pick_service = function(callback)
-			callback("svc")
-		end
-		local file = write_file("q10.sql", { "select 1" })
-		vim.cmd("edit " .. vim.fn.fnameescape(file))
-
-		sqlrun.run()
+		run_with_stubbed_picker("q10.sql")
 
 		assert.same(2, #event_log)
 		assert.equals("SqlrunRunStart", event_log[1].pattern)
