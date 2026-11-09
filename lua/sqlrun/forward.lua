@@ -36,10 +36,7 @@ local function process_starttime(pid)
 	if not after_comm then
 		return nil
 	end
-	local fields = {}
-	for field in after_comm:gmatch("%S+") do
-		table.insert(fields, field)
-	end
+	local fields = vim.split(after_comm, "%s+", { trimempty = true })
 	local comm_last_field = 2
 	local starttime_field = 22
 	return fields[starttime_field - comm_last_field]
@@ -279,16 +276,12 @@ end
 function M.ensure_forward(service, opts, on_ready, on_failed)
 	if not ini.valid_service_name(service) then
 		notify_error("unsafe service name: " .. service)
-		if on_failed then
-			on_failed()
-		end
+		on_failed()
 		return
 	end
 	if not opts.port then
 		notify_error("service " .. service .. ": no valid port in connections.toml")
-		if on_failed then
-			on_failed()
-		end
+		on_failed()
 		return
 	end
 	if pending[service] then
@@ -321,9 +314,7 @@ function M.ensure_forward(service, opts, on_ready, on_failed)
 		end
 		release_pending()
 		notify_error(message)
-		if on_failed then
-			on_failed()
-		end
+		on_failed()
 	end
 
 	local function start_probe(on_result)
@@ -406,11 +397,7 @@ function M.ensure_forward(service, opts, on_ready, on_failed)
 		end)
 	end)
 	if not ok then
-		release_pending()
-		notify_error("forward check failed: " .. tostring(setup_err))
-		if on_failed then
-			on_failed()
-		end
+		fail("forward check failed: " .. tostring(setup_err))
 	end
 end
 
