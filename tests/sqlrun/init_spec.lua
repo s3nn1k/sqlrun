@@ -198,7 +198,6 @@ describe("run", function()
 		end
 		sqlrun.setup({
 			pg_service_path = tmp_root .. "/pg_service.conf",
-			connections_path = tmp_root .. "/missing-connections.toml",
 		})
 		write_file("pg_service.conf", { "[svc]", "port=15432" })
 		original_pick_service = sqlrun.pick_service
@@ -362,7 +361,6 @@ describe("run", function()
 		vim.fn.setenv("PGSERVICEFILE", tmp_root .. "/ambient.conf")
 		sqlrun.setup({
 			pg_service_path = tmp_root .. "/selected.conf",
-			connections_path = tmp_root .. "/missing-connections.toml",
 		})
 		write_file("selected.conf", { "[svc]", "port=15432" })
 		run_with_stubbed_picker("q6.sql")
@@ -454,34 +452,11 @@ describe("run", function()
 		assert.equals("error", vim.g.sqlrun_last_status)
 	end)
 
-	it("pairs SqlrunRunDone with Start and marks error on a consistency failure", function()
-		drain_scheduled_events()
-		local event_log = capture_run_events()
-		write_file("connections.toml", { "[svc]", "port=9999" })
-		sqlrun.setup({
-			pg_service_path = tmp_root .. "/pg_service.conf",
-			connections_path = tmp_root .. "/connections.toml",
-		})
-		run_with_stubbed_picker("q10.sql")
-
-		assert.same(2, #event_log)
-		assert.equals("SqlrunRunStart", event_log[1].pattern)
-		assert.equals("SqlrunRunDone", event_log[2].pattern)
-		assert.equals("error", event_log[2].status)
-		assert.equals("error", vim.g.sqlrun_last_status)
-		local errors = vim.tbl_filter(function(call)
-			return call.level == vim.log.levels.ERROR
-		end, notify_calls)
-		assert.same(1, #errors)
-		assert.is_nil(last_argv)
-	end)
-
 	it("applies configured result keymaps to the result buffer", function()
 		vim.g.sqlrun_service = nil
 		vim.b.sqlrun_service = nil
 		sqlrun.setup({
 			pg_service_path = tmp_root .. "/pg_service.conf",
-			connections_path = tmp_root .. "/missing-connections.toml",
 			result_keymaps = { close = "Z", save = false },
 		})
 		run_with_stubbed_picker("q11.sql")
@@ -546,9 +521,7 @@ describe("setup", function()
 	it("accepts the known keys with correct types", function()
 		sqlrun.setup({
 			pg_service_path = "/tmp/pg.conf",
-			connections_path = "/tmp/connections.toml",
 			max_lines = 100,
-			probe_timeout_ms = 1000,
 			result_keymaps = { close = "Z", save = false },
 		})
 		assert.same({}, warned)

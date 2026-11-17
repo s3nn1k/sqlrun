@@ -14,8 +14,8 @@ host = h2
 	end)
 
 	it("strips surrounding double quotes from values", function()
-		local parsed = ini.parse_ini('[svc]\npre_cmd = "kubectl port-forward svc/x 15432:5432"\n')
-		assert.same("kubectl port-forward svc/x 15432:5432", parsed.svc.pre_cmd)
+		local parsed = ini.parse_ini('[svc]\ndbname = "orders db"\n')
+		assert.same("orders db", parsed.svc.dbname)
 	end)
 
 	it("skips comments and empty lines", function()
@@ -35,29 +35,7 @@ host = h2
 	end)
 end)
 
-describe("parse_port", function()
-	it("parses a numeric port", function()
-		assert.same(15432, ini.parse_port({ port = "15432" }))
-		assert.same(5432, ini.parse_port({ port = 5432 }))
-	end)
-
-	it("returns nil for missing port", function()
-		assert.is_nil(ini.parse_port({ host = "h" }))
-		assert.is_nil(ini.parse_port({}))
-	end)
-
-	it("returns nil for garbage port", function()
-		assert.is_nil(ini.parse_port({ port = "abc" }))
-	end)
-
-	it("returns nil for out-of-range or fractional ports", function()
-		assert.is_nil(ini.parse_port({ port = 0 }))
-		assert.is_nil(ini.parse_port({ port = 70000 }))
-		assert.is_nil(ini.parse_port({ port = 1.5 }))
-	end)
-end)
-
-describe("config readers", function()
+describe("read_pg_service", function()
 	it("skips unsafe section names with one warning and keeps valid ones", function()
 		local path = vim.fs.normalize(vim.fn.tempname())
 		vim.fn.writefile({ "[ok-one]", "port=1", "[../evil]", "port=2" }, path)
@@ -68,7 +46,7 @@ describe("config readers", function()
 				table.insert(warns, message)
 			end
 		end
-		local sections = ini.read_connections(path)
+		local sections = ini.read_pg_service(path)
 		vim.notify = original_notify
 		assert.same({ port = "1" }, sections["ok-one"])
 		assert.is_nil(sections["../evil"])
@@ -78,7 +56,7 @@ describe("config readers", function()
 	end)
 
 	it("returns nothing for a missing file", function()
-		assert.is_nil(ini.read_connections(vim.fs.normalize(vim.fn.tempname()) .. "/absent.toml"))
+		assert.is_nil(ini.read_pg_service(vim.fs.normalize(vim.fn.tempname()) .. "/absent.conf"))
 	end)
 
 	it("warns once per file path per session", function()
@@ -91,42 +69,11 @@ describe("config readers", function()
 				table.insert(warns, message)
 			end
 		end
-		ini.read_connections(path)
-		ini.read_connections(path)
-		ini.read_connections(path)
+		ini.read_pg_service(path)
+		ini.read_pg_service(path)
+		ini.read_pg_service(path)
 		vim.notify = original_notify
 		assert.same(1, #warns)
 		vim.fn.delete(path)
-	end)
-end)
-
-describe("validate_consistency", function()
-	local connections = { work = { port = "15432" } }
-
-	it("passes when ports match", function()
-		assert.is_nil(ini.validate_consistency(connections, { work = { port = "15432" } }))
-	end)
-
-	it("reports mismatch with service and both ports", function()
-		local err = ini.validate_consistency(connections, { work = { port = "5433" } })
-		assert.truthy(err:find("work"))
-		assert.truthy(err:find("15432"))
-		assert.truthy(err:find("5433"))
-	end)
-
-	it("reports a missing pg_service section", function()
-		local err = ini.validate_consistency(connections, { other = { port = "15432" } })
-		assert.truthy(err:find("work"))
-	end)
-
-	it("reports an invalid port", function()
-		local err = ini.validate_consistency({ work = { port = "oops" } }, { work = { port = "15432" } })
-		assert.truthy(err:find("oops"))
-		assert.truthy(err:find("15432"))
-	end)
-
-	it("reports unreadable inputs", function()
-		assert.truthy(ini.validate_consistency(nil, {}))
-		assert.truthy(ini.validate_consistency({}, nil))
 	end)
 end)

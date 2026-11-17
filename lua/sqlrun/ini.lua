@@ -32,17 +32,6 @@ function M.parse_ini(text)
 	return sections
 end
 
-function M.parse_port(section)
-	if type(section) ~= "table" then
-		return nil
-	end
-	local port = tonumber(section.port)
-	if not port or port < 1 or port > 65535 or port % 1 ~= 0 then
-		return nil
-	end
-	return port
-end
-
 function M.valid_service_name(name)
 	return type(name) == "string" and name:match(service_name_pattern) ~= nil
 end
@@ -51,9 +40,9 @@ local function expand(path)
 	return vim.fs.normalize(vim.fn.expand(path))
 end
 
-local warned_sources = {}
+local warned_paths = {}
 
-local function sanitize_sections(sections, path, source)
+local function sanitize_sections(sections, path)
 	local valid = {}
 	local unsafe = {}
 	for name, section in pairs(sections) do
@@ -63,67 +52,29 @@ local function sanitize_sections(sections, path, source)
 			table.insert(unsafe, name)
 		end
 	end
-	if #unsafe > 0 and not warned_sources[path] then
-		warned_sources[path] = true
+	if #unsafe > 0 and not warned_paths[path] then
+		warned_paths[path] = true
 		table.sort(unsafe)
 		local listed = vim.tbl_map(function(name)
 			return '"' .. name .. '"'
 		end, unsafe)
 		vim.notify(
-			"sqlrun: skipping services with unsafe names in " .. source .. ": " .. table.concat(listed, ", "),
+			"sqlrun: skipping services with unsafe names in pg_service: " .. table.concat(listed, ", "),
 			vim.log.levels.WARN
 		)
 	end
 	return valid
 end
 
-local function read_sections(path, source)
+function M.read_pg_service(path)
+	path = expand(path or os.getenv("PGSERVICEFILE") or "~/.pg_service.conf")
 	local file = io.open(path, "r")
 	if not file then
 		return nil
 	end
 	local text = file:read("*a")
 	file:close()
-	return sanitize_sections(M.parse_ini(text), path, source)
-end
-
-function M.read_pg_service(path)
-	return read_sections(expand(path or os.getenv("PGSERVICEFILE") or "~/.pg_service.conf"), "pg_service")
-end
-
-function M.read_connections(path)
-	return read_sections(expand(path or "~/credentials/postgres/connections.toml"), "connections.toml")
-end
-
-function M.validate_consistency(connections, pg_service)
-	if not connections or not pg_service then
-		return "cannot read connections.toml or pg_service file"
-	end
-	for service, section in pairs(connections) do
-		local pg_section = pg_service[service]
-		if not pg_section then
-			return string.format('service "%s": no [%s] section in pg_service', service, service)
-		end
-		local connections_port = M.parse_port(section)
-		local pg_port = M.parse_port(pg_section)
-		if not connections_port or not pg_port then
-			return string.format(
-				'service "%s": invalid port (connections: %s / pg_service: %s)',
-				service,
-				tostring(section.port),
-				tostring(pg_section.port)
-			)
-		end
-		if connections_port ~= pg_port then
-			return string.format(
-				'service "%s": port mismatch (connections: %d / pg_service: %d)',
-				service,
-				connections_port,
-				pg_port
-			)
-		end
-	end
-	return nil
+	return sanitize_sections(M.parse_ini(text), path)
 end
 
 return M
