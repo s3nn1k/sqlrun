@@ -5,6 +5,7 @@ local notify_calls
 local last_argv
 local last_opts
 local last_exit_callback
+local spawned_process
 local spawn_should_throw
 local original_system
 local original_notify
@@ -31,6 +32,7 @@ local function stub_system()
 	last_argv = nil
 	last_opts = nil
 	last_exit_callback = nil
+	spawned_process = nil
 	vim.system = function(argv, opts, on_exit)
 		if spawn_should_throw then
 			error("spawn failed: enoent")
@@ -38,7 +40,15 @@ local function stub_system()
 		last_argv = argv
 		last_opts = opts
 		last_exit_callback = on_exit
-		return { pid = 424242 }
+		spawned_process = {
+			pid = 424242,
+			kill_calls = {},
+			kill = function(process, signal)
+				table.insert(process.kill_calls, signal)
+				return true
+			end,
+		}
+		return spawned_process
 	end
 end
 
@@ -452,6 +462,73 @@ describe("run", function()
 		assert.equals("error", vim.g.sqlrun_last_status)
 	end)
 
+	it("kills psql on timeout and reports the run as error (timeout)", function()
+		drain_scheduled_events()
+		sqlrun.setup({ pg_service_path = tmp_root .. "/pg_service.conf", timeout_ms = 10 })
+		local event_log = capture_run_events()
+		run_with_stubbed_picker("q10.sql")
+
+		assert.is_true(vim.wait(1000, function()
+			return spawned_process ~= nil and #spawned_process.kill_calls > 0
+		end))
+		assert.same({ 9 }, spawned_process.kill_calls)
+
+		last_exit_callback({ code = 137, stdout = "", stderr = "" })
+
+		assert.is_true(vim.wait(500, function()
+			return #event_log == 2
+		end))
+		assert.equals("SqlrunRunDone", event_log[2].pattern)
+		assert.equals("error", event_log[2].status)
+		assert.equals("error", vim.g.sqlrun_last_status)
+		assert.truthy(result_header():find("status: error %(timeout%)"))
+
+		sqlrun.run()
+		last_exit_callback({ code = 0, stdout = "", stderr = "" })
+		assert.is_true(vim.wait(500, function()
+			local header = result_header()
+			return header ~= nil and header:find("status: ok") ~= nil
+		end))
+		local busy = vim.tbl_filter(function(call)
+			return call.level == vim.log.levels.WARN and call.message:find("already running", 1, true) ~= nil
+		end, notify_calls)
+		assert.same({}, busy)
+	end)
+
+	it("does not arm the kill timer when timeout_ms is zero", function()
+		drain_scheduled_events()
+		sqlrun.setup({ pg_service_path = tmp_root .. "/pg_service.conf", timeout_ms = 0 })
+		run_with_stubbed_picker("q12.sql")
+
+		vim.wait(50, function()
+			return false
+		end, 1)
+
+		assert.same({}, spawned_process.kill_calls)
+		last_exit_callback({ code = 0, stdout = "1\n", stderr = "" })
+		assert.is_true(vim.wait(500, function()
+			local header = result_header()
+			return header ~= nil and header:find("status: ok") ~= nil
+		end))
+	end)
+
+	it("closes the timeout timer without killing psql on a normal early exit", function()
+		drain_scheduled_events()
+		sqlrun.setup({ pg_service_path = tmp_root .. "/pg_service.conf", timeout_ms = 40 })
+		run_with_stubbed_picker("q13.sql")
+
+		last_exit_callback({ code = 0, stdout = "1\n", stderr = "" })
+
+		assert.is_true(vim.wait(500, function()
+			local header = result_header()
+			return header ~= nil and header:find("status: ok") ~= nil
+		end))
+		vim.wait(80, function()
+			return false
+		end, 1)
+		assert.same({}, spawned_process.kill_calls)
+	end)
+
 	it("applies configured result keymaps to the result buffer", function()
 		vim.g.sqlrun_service = nil
 		vim.b.sqlrun_service = nil
@@ -522,6 +599,7 @@ describe("setup", function()
 		sqlrun.setup({
 			pg_service_path = "/tmp/pg.conf",
 			max_lines = 100,
+			timeout_ms = 50,
 			result_keymaps = { close = "Z", save = false },
 		})
 		assert.same({}, warned)

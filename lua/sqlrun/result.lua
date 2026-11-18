@@ -134,7 +134,7 @@ function M.show(done)
 	if cut.truncated then
 		table.insert(cut.lines, "-- output truncated to " .. done.max_lines .. " lines")
 	end
-	local status = failed and ("error (exit " .. done.code .. ")") or "ok"
+	local status = done.timeout and "error (timeout)" or (failed and ("error (exit " .. done.code .. ")") or "ok")
 	local header = "-- service: "
 		.. done.service
 		.. " | source: "

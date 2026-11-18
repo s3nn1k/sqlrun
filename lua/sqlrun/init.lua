@@ -6,6 +6,7 @@ local M = {}
 local defaults = {
 	pg_service_path = os.getenv("PGSERVICEFILE") or "~/.pg_service.conf",
 	max_lines = 2000,
+	timeout_ms = 300000,
 	result_keymaps = result.default_keymaps,
 }
 
@@ -199,11 +200,16 @@ local function execute(service, target)
 	local columns = vim.api.nvim_win_get_width(win)
 	result.show_running(service, target.source, config.result_keymaps)
 	local started_at = vim.uv.hrtime()
+	local timeout_timer = nil
+	local timeout_hit = false
 	local ok, spawn_or_err = pcall(
 		vim.system,
 		psql_args(service, target, columns),
 		{ text = true, env = { PGSERVICEFILE = expand_path(config.pg_service_path) } },
 		function(done)
+			if timeout_timer ~= nil and not timeout_hit then
+				timeout_timer:close()
+			end
 			running = false
 			vim.schedule(function()
 				result.show({
@@ -213,6 +219,7 @@ local function execute(service, target)
 					code = done.code,
 					stdout = done.stdout,
 					stderr = done.stderr,
+					timeout = timeout_hit or nil,
 					max_lines = config.max_lines,
 					result_keymaps = config.result_keymaps,
 				})
@@ -223,7 +230,19 @@ local function execute(service, target)
 	)
 	if not ok then
 		fail_with_error("cannot run psql: " .. tostring(spawn_or_err))
+		return
 	end
+	if config.timeout_ms <= 0 then
+		return
+	end
+	timeout_timer = vim.uv.new_timer()
+	timeout_timer:start(config.timeout_ms, 0, function()
+		timeout_hit = true
+		timeout_timer:close()
+		if running then
+			spawn_or_err:kill(9)
+		end
+	end)
 end
 
 local function start_query(service, target)

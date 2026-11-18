@@ -9,9 +9,10 @@ split.
   `pg_service_path`; the rest of the environment is inherited and `pgpass` is left to
   libpq.
 - Result buffer `sqlrun://result` shows service, source, timing, status; stderr and
-  non-zero exits render as errors; output is capped by `max_lines`; `q` closes the window
-  and the next run reuses it. The buffer is read-only; `<C-s>` saves it to a file - next
-  to the query file by default (`<query>.<service>.result.txt`), timestamped under
+  non-zero exits render as errors; a query killed by `timeout_ms` renders as
+  `error (timeout)`; output is capped by `max_lines`; `q` closes the window and the next
+  run reuses it. The buffer is read-only; `<C-s>` saves it to a file - next to the query
+  file by default (`<query>.<service>.result.txt`), timestamped under
   `stdpath("data")/sqlrun` for selections; the path is editable in the prompt.
 
 ## Requirements
@@ -30,6 +31,8 @@ All `setup()` keys are optional:
 
 - `pg_service_path` - `os.getenv("PGSERVICEFILE") or "~/.pg_service.conf"`
 - `max_lines` - `2000`
+- `timeout_ms` - `300000`; a query running longer is killed and the result shows
+  `error (timeout)`; `<= 0` disables the kill timer
 - `result_keymaps` - `{ close = "q", save = "<C-s>" }`; each field is a buffer-local key
   lhs string, or `false` to not create the map
 
