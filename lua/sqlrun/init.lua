@@ -1,4 +1,3 @@
-local forward = require("sqlrun.forward")
 local ini = require("sqlrun.ini")
 local result = require("sqlrun.result")
 
@@ -6,9 +5,7 @@ local M = {}
 
 local defaults = {
 	pg_service_path = os.getenv("PGSERVICEFILE") or "~/.pg_service.conf",
-	connections_path = "~/credentials/postgres/connections.toml",
 	max_lines = 2000,
-	probe_timeout_ms = 15000,
 	result_keymaps = result.default_keymaps,
 }
 
@@ -61,8 +58,8 @@ function M.setup(opts)
 	config = vim.tbl_deep_extend("force", defaults, opts or {})
 end
 
-local function service_names(connections, pg_service)
-	local names = vim.tbl_keys(vim.tbl_extend("force", connections or {}, pg_service or {}))
+local function service_names(pg_service)
+	local names = vim.tbl_keys(pg_service or {})
 	table.sort(names)
 	return names
 end
@@ -123,17 +120,7 @@ end
 
 function M.pick_service(on_selected)
 	local handler = on_selected or function() end
-	local connections = ini.read_connections(config.connections_path)
-	local pg_service = ini.read_pg_service(config.pg_service_path)
-	if connections and next(connections) then
-		local consistency_error = ini.validate_consistency(connections, pg_service)
-		if consistency_error then
-			notify_error(consistency_error)
-			handler(nil)
-			return
-		end
-	end
-	local names = service_names(connections, pg_service)
+	local names = service_names(ini.read_pg_service(config.pg_service_path))
 	if #names == 0 then
 		vim.notify("sqlrun: no pg services found", vim.log.levels.WARN)
 		handler(nil)
@@ -241,32 +228,9 @@ end
 
 local function start_query(service, target)
 	vim.api.nvim_exec_autocmds("User", { pattern = "SqlrunRunStart", modeline = false })
-	local connections = ini.read_connections(config.connections_path)
-	if connections and connections[service] then
-		local pg_service = ini.read_pg_service(config.pg_service_path)
-		local consistency_error = ini.validate_consistency(connections, pg_service)
-		if consistency_error then
-			fail_with_error(consistency_error)
-			return
-		end
-		local section = connections[service]
-		local ensured, ensure_err = pcall(forward.ensure_forward, service, {
-			port = ini.parse_port(section),
-			pre_cmd = section.pre_cmd,
-			probe_timeout_ms = config.probe_timeout_ms,
-		}, function()
-			execute(service, target)
-		end, function()
-			running = false
-		end)
-		if not ensured then
-			fail_with_error("forward check failed: " .. tostring(ensure_err))
-		end
-		return
-	end
 	local pg_service = ini.read_pg_service(config.pg_service_path)
 	if not pg_service or not pg_service[service] then
-		fail_with_error("service " .. service .. " not found in pg_service or connections")
+		fail_with_error("service " .. service .. " not found in pg_service")
 		return
 	end
 	execute(service, target)
@@ -295,14 +259,6 @@ function M.run()
 		end
 		start_query(chosen, target_or_err)
 	end)
-end
-
-function M.sweep()
-	forward.sweep()
-end
-
-function M.shutdown()
-	forward.shutdown()
 end
 
 return M
